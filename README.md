@@ -315,7 +315,7 @@ Contributions are what make open source great. All contributions are welcome —
 
 ```bash
 # Fork the repo, then clone your fork
-git clone https://github.com/YOUR_USERNAME/safedeps.git
+git clone https://github.com/kumarsainideepak/safedeps.git
 cd safedeps
 
 # Install dependencies
