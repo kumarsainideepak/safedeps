@@ -381,7 +381,7 @@ safedeps/
 
 Found a vulnerability in SafeDeps itself? Please **do not** open a public GitHub issue.
 
-Email us at: **security@safedeps.dev** *(replace with your email)*
+Email us at: **kumarsainideepak32@gmail.com**
 
 We follow responsible disclosure and will respond within 48 hours.
 
@@ -424,8 +424,7 @@ This means:
 - ⚠️ If you modify SafeDeps and run it as a network service (e.g. a SaaS product), you **must** release your modifications under AGPL-3.0
 - ⚠️ You must preserve the copyright notice and license in all copies
 
-For commercial licensing (if you need to use SafeDeps without AGPL obligations), contact: **deepak@safedeps.dev** *(replace with your actual email)*
-
+For commercial licensing (if you need to use SafeDeps without AGPL obligations), contact: **kumarsainideepak32@gmail.com**
 See the [LICENSE](LICENSE) file for the full text.
 
 ---
