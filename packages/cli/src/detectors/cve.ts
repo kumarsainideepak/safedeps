@@ -1,0 +1,208 @@
+import { queryOSV } from '../sources/osv';
+import type { OsvPackage, OsvResult } from '../sources/osv';
+import { parseLockfile } from '../utils/lockfileParser';
+import { normaliseVuln } from '../utils/severity';
+import type { NormalisedVuln } from '../utils/severity';
+import type { ParsedPackageJson } from '../utils/packageParser';
+
+export interface CveFinding {
+  name: string;
+  version: string;
+  vulnCount: number;
+  topSeverity: string;
+  vulns: NormalisedVuln[];
+}
+
+export interface CveResult {
+  findings: CveFinding[];
+  scanned: number;
+  skipped: number;
+  error?: string;
+}
+
+export interface ScanCveOptions {
+  projectPath?:   string;
+  minSeverity?:   string;
+  lockVersions?:  Map<string, string>;
+  /** Injectable OSV query function — used in tests to avoid real HTTP calls. */
+  queryFn?:       (packages: OsvPackage[]) => Promise<OsvResult[]>;
+}
+
+/**
+ * CVE Vulnerability Detector
+ *
+ * Scans all project dependencies against the OSV.dev vulnerability database.
+ *
+ * Strategy:
+ *   1. Read resolved versions from package-lock.json (most accurate)
+ *   2. Fall back to version ranges from package.json if no lockfile
+ *   3. Batch-query OSV.dev API (single HTTP request for all packages)
+ *   4. Normalise and return structured findings
+ */
+export async function scanCVEs(
+  parsedPackageJson: ParsedPackageJson,
+  options: ScanCveOptions = {}
+): Promise<CveResult> {
+  const {
+    projectPath = process.cwd(),
+    minSeverity = 'low',
+    lockVersions: lockVersionsOpt,
+    queryFn = queryOSV,
+  } = options;
+
+  // 1. Build package list with resolved versions from lockfile
+  const lockVersions = lockVersionsOpt ?? parseLockfile(projectPath);
+  const allPackageNames = parsedPackageJson.allPackages;
+  const allDeps: Record<string, string> = {
+    ...parsedPackageJson.dependencies,
+    ...parsedPackageJson.devDependencies,
+    ...parsedPackageJson.peerDependencies,
+    ...parsedPackageJson.optionalDependencies,
+  };
+
+  const toScan: OsvPackage[] = [];
+  const skipped: string[]    = [];
+
+  for (const name of allPackageNames) {
+    // Prefer lockfile version (exact), fall back to range from package.json
+    let version = lockVersions.get(name);
+
+    if (!version) {
+      const rawVersion = allDeps[name] ?? '';
+      version = _resolveVersionRange(rawVersion) ?? undefined;
+    }
+
+    if (!version) {
+      skipped.push(name);
+      continue;
+    }
+
+    toScan.push({ name, version });
+  }
+
+  if (toScan.length === 0) {
+    return { findings: [], scanned: 0, skipped: skipped.length };
+  }
+
+  // 2. Query OSV.dev in a single batch request
+  let osvResults;
+  try {
+    osvResults = await queryFn(toScan);
+  } catch (err) {
+    throw new Error(`CVE scan failed: ${(err as Error).message}`);
+  }
+
+  // 3. Build findings from OSV results
+  const severityOrder = ['critical', 'high', 'medium', 'low', 'unknown'];
+  const minIdx        = severityOrder.indexOf(minSeverity.toLowerCase());
+
+  const findings: CveFinding[] = [];
+
+  for (const result of osvResults) {
+    if (!result.vulns || result.vulns.length === 0) continue;
+
+    // Normalise each vulnerability
+    const normalisedVulns = result.vulns.map(normaliseVuln);
+
+    // Filter by minSeverity
+    const filtered = normalisedVulns.filter(v => {
+      const idx = severityOrder.indexOf(v.severity.toLowerCase());
+      return idx !== -1 && idx <= minIdx;
+    });
+
+    if (filtered.length === 0) continue;
+
+    // Sort vulns by severity (critical first)
+    filtered.sort((a, b) =>
+      severityOrder.indexOf(a.severity.toLowerCase()) -
+      severityOrder.indexOf(b.severity.toLowerCase())
+    );
+
+    findings.push({
+      name:        result.name,
+      version:     result.version,
+      vulnCount:   filtered.length,
+      topSeverity: filtered[0].severity,
+      vulns:       filtered,
+    });
+  }
+
+  // Sort findings by severity (critical packages first)
+  findings.sort((a, b) =>
+    severityOrder.indexOf(a.topSeverity.toLowerCase()) -
+    severityOrder.indexOf(b.topSeverity.toLowerCase())
+  );
+
+  return {
+    findings,
+    scanned: toScan.length,
+    skipped: skipped.length,
+  };
+}
+
+/**
+ * Resolves a package.json version range string to a concrete semver version
+ * suitable for querying OSV.dev.
+ *
+ * Handles the common forms found in package.json:
+ *   ^1.2.3  ~1.2.3  >=1.2.3  1.2.3           → 1.2.3
+ *   1.x  1.x.x  1.2.x                         → 1.0.0 / 1.2.0
+ *   >=1.0.0 <2.0.0  ^1.0.0 || ^2.0.0          → first clean version found
+ *   workspace:^1.0.0                           → strip workspace: prefix first
+ *   file:../pkg  git+https://...  link:../pkg  → returns null (skip)
+ *   *  ""                                      → returns null (skip)
+ *
+ * Returns null when the range cannot be resolved to a valid version — the
+ * caller should skip that package rather than send garbage to OSV.
+ */
+export function _resolveVersionRange(raw: string): string | null {
+  if (!raw || raw.trim() === '') return null;
+
+  let s = raw.trim();
+
+  // Strip workspace: protocol (yarn/pnpm workspaces)
+  if (s.startsWith('workspace:')) s = s.slice('workspace:'.length).trim();
+
+  // Skip protocols that are not semver ranges
+  if (/^(file:|link:|portal:|git\+|git:|github:|https?:|[a-zA-Z]:\\|\.\/|\.\.\/)/.test(s)) return null;
+
+  // Skip npm package aliases: "npm:other-package@^1.0"
+  if (s.startsWith('npm:')) {
+    const atIdx = s.lastIndexOf('@');
+    if (atIdx > 4) s = s.slice(atIdx + 1);
+    else return null;
+  }
+
+  // Wildcard / any
+  if (s === '*' || s === 'x' || s === '') return null;
+
+  // Split OR expressions and take the first resolvable term
+  if (s.includes('||')) {
+    for (const term of s.split('||')) {
+      const resolved = _resolveVersionRange(term.trim());
+      if (resolved) return resolved;
+    }
+    return null;
+  }
+
+  // Take the first space-separated token (handles ">=1.0.0 <2.0.0" → ">=1.0.0")
+  const firstToken = s.split(/\s+/)[0];
+
+  // Strip leading range specifiers
+  const stripped = firstToken.replace(/^[~^>=<!]+/, '').trim();
+
+  // Replace wildcard segments: 1.x → 1.0.0, 1.2.x → 1.2.0, 1.x.x → 1.0.0
+  const resolved = stripped
+    .replace(/\.x\.x$/i, '.0.0')
+    .replace(/^(\d+)\.x$/i, '$1.0.0')
+    .replace(/\.x$/i,    '.0')
+    .replace(/^(\d+)\.x$/i, '$1.0.0');
+
+  // Must start with at least one digit and look like a semver
+  if (!/^\d/.test(resolved) || resolved === '') return null;
+
+  // Must have at least major.minor (two numeric segments)
+  if (!/^\d+\.\d+/.test(resolved)) return null;
+
+  return resolved;
+}
