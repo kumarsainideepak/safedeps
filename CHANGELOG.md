@@ -5,6 +5,85 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [v0.0.2] — 2026-04-02
+
+### Added
+- **`safedeps update-packages` command**: New CLI command (`src/commands/updatePackages.ts`)
+  to refresh `data/top-packages.json` from the npm registry search API. Accepts
+  `--count <n>` (default 5000) and `--output terminal|json`. Replaces the former
+  package.json script so users can update on their own schedule.
+- **HTTP retry utility** (`src/utils/httpRetry.ts`): `fetchWithRetry()` adds
+  exponential backoff with ±25% jitter, configurable timeout, and `Retry-After`
+  header support. Retries on network errors, 429, 503, and 5xx; does not retry
+  4xx responses. All four HTTP sources (`osv`, `npmRegistry`, `githubApi`,
+  `npmDownloads`) migrated to use it.
+- **Homoglyph typosquat detection** (`method: 'homoglyph'`, confidence: `high`):
+  Detects Unicode lookalike characters (Cyrillic а/е/о/р/с/у/і, ℓ, ０/１, etc.)
+  substituted into known package names. Checked with highest priority before all
+  other methods.
+- **Separator substitution detection** (`method: 'separator'`, confidence: `medium`):
+  Detects packages that differ from a known name only in separator characters
+  (`-`, `_`, `.`), e.g. `bodyparser` → `body-parser`.
+- **Combosquat detection** (`method: 'combosquat'`, confidence: `low`):
+  Detects packages formed by prepending/appending common suffixes or prefixes to
+  a known package name (e.g. `lodash-utils`, `node-express`).
+- **`SignalRegistry`** (`src/utils/signalRegistry.ts`): Shared in-memory store that
+  lets detectors publish and consume package signals (downloads, age, versions,
+  GitHub stars, maintainer account age) without duplicate API calls.
+- **Multi-signal authenticity scoring**: `enrichWithAuthenticity()` now computes a
+  composite 0–100 score from five signals — weekly downloads (35 pts), package age
+  (25 pts), published versions (15 pts), GitHub presence + stars (10 pts), maintainer
+  account age (15 pts). Score ≥ 70 → dismissed; 50–69 → `likely-legitimate`;
+  25–49 → `uncertain`; < 25 → `suspicious`. Replaces the single-signal
+  download-count heuristic from v0.0.1.
+- **`existsOnNpm` signal**: npm downloads source now returns `existsOnNpm: boolean | null`.
+  A 404 response sets `existsOnNpm: false`, forcing score = 0 and upgrading confidence
+  to `high`.
+- **`NpmAuthenticity` extended**: Added `score`, `publishedVersions`, `hasGitHubRepo`,
+  and `existsOnNpm` fields alongside the existing `weeklyDownloads`, `ageInDays`,
+  `verdict`, and `dismissed` fields.
+- **CVE `versionSource` tracking**: Each `CveFinding` now carries
+  `versionSource: 'lockfile' | 'range-floor' | 'unknown'`. A warning is printed
+  when any package version was resolved via range-floor (no lockfile present), noting
+  that results may over-report and suggesting `npm install` for precise resolution.
+- **License scanning in `check` command**: `safedeps check <pkg>` now runs
+  `scanLicenses()` in parallel with CVE and maintainer checks, and renders a full
+  License Compliance section in the terminal output.
+- **`--include-dev` flag for `scan`**: When passed, `scanLicenses()` includes
+  `devDependencies` in the compatibility check. The section header is updated to
+  indicate dev dependencies were included.
+- **7 httpRetry tests** (`tests/httpRetry.test.ts`): Covers retry exhaustion, 404
+  no-retry, success-on-retry, network error, and timeout behaviour.
+
+### Changed
+- **`TyposquatFinding.method`**: `'both'` renamed to `'levenshtein+soundex'`
+  everywhere — type definition, assignment, terminal reporter label map, and test
+  assertions. Removes ambiguity about which methods fired.
+- **Detection priority order in `_analyseWithSet()`**: Homoglyph → separator
+  candidate → levenshtein+soundex → combosquat. Highest-confidence candidate
+  wins when multiple methods match.
+- **`ScanMaintainerOptions`**: Accepts optional `signalRegistry` so the maintainer
+  detector writes packument and GitHub signals into the shared registry rather than
+  computing them in isolation.
+- **`scan` command**: Instantiates `SignalRegistry` before `Promise.allSettled` and
+  passes it to both `scanMaintainerHealth` and `enrichWithAuthenticity`, enabling
+  cross-detector signal reuse.
+- **Terminal license header**: Appends ` (incl. dev)` when `licenseResult.includesDevDeps`
+  is true.
+
+### Fixed
+- **CRITICAL — UNKNOWN severity CVEs silently dropped**: The severity filter in
+  `src/detectors/cve.ts` compared `severityOrder.indexOf('unknown')` (4) against
+  `minIdx` for `'low'` (3), causing `4 <= 3 = false` — all UNKNOWN-severity
+  findings (MAL-* malware advisories, many GHSA entries with no explicit CVSS)
+  were silently discarded. UNKNOWN findings now always pass the filter. Running
+  `safedeps check axios@0.30.4` now correctly surfaces MAL advisories.
+- **UNKNOWN severity colour**: Terminal reporter now renders UNKNOWN severity in
+  magenta (`chalk.magenta`) instead of dim grey, making malware advisories visually
+  distinct.
+
+---
+
 ## [v0.0.1]
 
 ### Added
