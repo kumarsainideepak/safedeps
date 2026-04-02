@@ -12,17 +12,20 @@
  */
 
 import { USER_AGENT } from '../utils/constants';
+import { fetchWithRetry } from '../utils/httpRetry';
 
 const DOWNLOADS_BASE = 'https://api.npmjs.org';
 const TIMEOUT_MS     = 6_000;
 
 export interface NpmDownloadStats {
   weeklyDownloads: number | null;
+  /** true = 200 OK, false = 404 (not on npm), null = network error */
+  existsOnNpm: boolean | null;
 }
 
 /**
  * Fetches the number of downloads in the last 7 days for a package.
- * Returns `null` on network error or if the package has no recorded downloads.
+ * Also indicates whether the package exists on npm at all.
  */
 export async function fetchWeeklyDownloads(name: string): Promise<NpmDownloadStats> {
   const encoded = name.startsWith('@')
@@ -31,37 +34,34 @@ export async function fetchWeeklyDownloads(name: string): Promise<NpmDownloadSta
 
   const url = `${DOWNLOADS_BASE}/downloads/point/last-week/${encoded}`;
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
-
   try {
-    const response = await fetch(url, {
-      headers: { Accept: 'application/json', 'User-Agent': USER_AGENT },
-      signal:  controller.signal,
-    });
-    clearTimeout(timer);
+    const response = await fetchWithRetry(
+      url,
+      { headers: { Accept: 'application/json', 'User-Agent': USER_AGENT } },
+      { timeoutMs: TIMEOUT_MS },
+    );
 
-    if (!response.ok) return { weeklyDownloads: null };
+    if (response.status === 404) return { weeklyDownloads: null, existsOnNpm: false };
+    if (!response.ok)            return { weeklyDownloads: null, existsOnNpm: null };
 
     const data = await response.json() as Record<string, unknown>;
     const downloads = typeof data.downloads === 'number' ? data.downloads : null;
-    return { weeklyDownloads: downloads };
+    return { weeklyDownloads: downloads, existsOnNpm: true };
   } catch {
-    clearTimeout(timer);
-    return { weeklyDownloads: null };
+    return { weeklyDownloads: null, existsOnNpm: null };
   }
 }
 
 /**
  * Batch-fetches weekly download stats for multiple packages with concurrency control.
  *
- * @returns Map of package name → weekly download count (null on error)
+ * @returns Map of package name → NpmDownloadStats
  */
 export async function batchFetchDownloads(
   names: string[],
   concurrency = 8,
-): Promise<Map<string, number | null>> {
-  const results = new Map<string, number | null>();
+): Promise<Map<string, NpmDownloadStats>> {
+  const results = new Map<string, NpmDownloadStats>();
 
   for (let i = 0; i < names.length; i += concurrency) {
     const chunk   = names.slice(i, i + concurrency);
@@ -71,7 +71,9 @@ export async function batchFetchDownloads(
       const outcome = settled[j];
       results.set(
         chunk[j],
-        outcome.status === 'fulfilled' ? outcome.value.weeklyDownloads : null,
+        outcome.status === 'fulfilled'
+          ? outcome.value
+          : { weeklyDownloads: null, existsOnNpm: null },
       );
     }
   }

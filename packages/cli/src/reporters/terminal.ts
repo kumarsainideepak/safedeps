@@ -1,6 +1,6 @@
 import pkg from '../../package.json';
 import type { TyposquatFinding } from '../detectors/typosquat';
-import type { CveResult } from '../detectors/cve';
+import type { CveResult, CveFinding } from '../detectors/cve';
 import type { LicenseResult } from '../detectors/license';
 import type { MaintainerResult, MaintainerFinding } from '../detectors/maintainer';
 
@@ -15,6 +15,7 @@ export interface CheckReport {
   maintainerNames:  string[];
   typosquatFinding: TyposquatFinding | null;
   cveResult:        CveResult | null;
+  licenseResult:    LicenseResult | null;
   maintainerResult: MaintainerResult | null;
   durationMs:       number;
 }
@@ -152,9 +153,12 @@ export async function renderFullReport(scanResult: ScanResult): Promise<void> {
 /** Builds the human-readable finding message for one typosquat result. */
 function buildFindingMessage(chalk: ChalkInstance, finding: TyposquatFinding): string {
   const methodLabel: Record<string, string> = {
-    levenshtein: 'character similarity',
-    soundex:     'phonetic similarity',
-    both:        'character + phonetic similarity',
+    levenshtein:          'character similarity',
+    soundex:              'phonetic similarity',
+    'levenshtein+soundex': 'character + phonetic similarity',
+    separator:            'separator substitution',
+    homoglyph:            'homoglyph substitution',
+    combosquat:           'combo suffix/prefix',
   };
 
   return (
@@ -197,7 +201,7 @@ function renderCveSection(chalk: ChalkInstance, result: CveResult): void {
     HIGH:     (s) => chalk.red(s),
     MEDIUM:   (s) => chalk.yellow(s),
     LOW:      (s) => chalk.cyan(s),
-    UNKNOWN:  (s) => chalk.dim(s),
+    UNKNOWN:  (s) => chalk.magenta(s),
   };
 
   const COL_SEV = 10;
@@ -232,6 +236,16 @@ function renderCveSection(chalk: ChalkInstance, result: CveResult): void {
     }
   }
 
+  // Warn when range-floor versioning was used — results may over-report CVEs
+  const rangeFlorCount = result.findings.filter(
+    (f: CveFinding) => f.versionSource === 'range-floor',
+  ).length;
+  if (rangeFlorCount > 0) {
+    console.log(
+      chalk.yellow(`  ⚠ ${rangeFlorCount} package${rangeFlorCount > 1 ? 's have' : ' has'} no lockfile version — using range floor (may over-report CVEs). Run 'npm install' for precise version resolution.`),
+    );
+  }
+
   console.log('');
 }
 
@@ -241,11 +255,12 @@ function renderCveSection(chalk: ChalkInstance, result: CveResult): void {
  * packages are counted in the summary line to keep output readable.
  */
 function renderLicenseSection(chalk: ChalkInstance, result: LicenseResult): void {
+  const devNote = result.includesDevDeps ? ' (incl. dev)' : '';
   console.log(
     chalk.bold.blue('  License Compliance') +
     chalk.dim(` — project: `) +
     chalk.white(result.projectLicense) +
-    chalk.dim(`, scanned ${result.scanned} dependencies`)
+    chalk.dim(`, scanned ${result.scanned} dependencies${devNote}`)
   );
   console.log('');
 
@@ -460,7 +475,7 @@ export async function renderCheckReport(report: CheckReport): Promise<void> {
   const {
     name, requestedVersion, resolvedVersion, license,
     weeklyDownloads, ageInDays, publishedVersions, maintainerNames,
-    typosquatFinding, cveResult, maintainerResult, durationMs,
+    typosquatFinding, cveResult, licenseResult, maintainerResult, durationMs,
   } = report;
 
   const displayVersion = requestedVersion ?? resolvedVersion;
@@ -517,7 +532,15 @@ export async function renderCheckReport(report: CheckReport): Promise<void> {
   } else {
     const auth = typosquatFinding.authenticity;
 
-    if (auth?.dismissed) {
+    if (auth?.existsOnNpm === false) {
+      const { label, color } = CONFIDENCE_MAP[typosquatFinding.confidence] ?? { label: 'CRITICAL', color: 'redBright' };
+      const colorFn = _chalkColor(chalk, color);
+      console.log(
+        `  ${colorFn.bold(label)} ` +
+        chalk.white(`"${name}"`) +
+        chalk.dim(` — package does not exist on npm (potential placeholder/malicious registration)`)
+      );
+    } else if (auth?.dismissed) {
       console.log(chalk.green(
         `  ✓ Name is similar to "${typosquatFinding.match}" but dismissed as false positive.`
       ));
@@ -561,6 +584,11 @@ export async function renderCheckReport(report: CheckReport): Promise<void> {
   // ── CVE Vulnerabilities ───────────────────────────────────────────────
   if (cveResult) {
     renderCveSection(chalk, cveResult);
+  }
+
+  // ── License Compliance ────────────────────────────────────────────────
+  if (licenseResult) {
+    renderLicenseSection(chalk, licenseResult);
   }
 
   // ── Maintainer Health ─────────────────────────────────────────────────

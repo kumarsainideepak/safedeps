@@ -15,6 +15,7 @@
  */
 
 import { USER_AGENT } from '../utils/constants';
+import { fetchWithRetry } from '../utils/httpRetry';
 
 const GITHUB_API_BASE = 'https://api.github.com';
 const TIMEOUT_MS      = 10_000;
@@ -98,18 +99,17 @@ export async function fetchGitHubRepoInfo(
 ): Promise<GitHubRepoInfo> {
   const url = `${GITHUB_API_BASE}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
-
   let response: Response;
   try {
-    response = await fetch(url, { headers: _buildHeaders(), signal: controller.signal });
+    response = await fetchWithRetry(
+      url,
+      { headers: _buildHeaders() },
+      { timeoutMs: TIMEOUT_MS },
+    );
   } catch (err) {
-    clearTimeout(timer);
     if ((err as Error).name === 'AbortError') throw new Error(`GitHub API timed out for ${owner}/${repo}`);
     throw new Error(`GitHub API network error: ${(err as Error).message}`);
   }
-  clearTimeout(timer);
 
   if (response.status === 404) throw new Error(`GitHub repo not found: ${owner}/${repo}`);
 

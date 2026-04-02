@@ -5,7 +5,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [Unreleased]
+## [v0.0.1]
 
 ### Added
 - **`check` command — full scan**: `safedeps check <pkg>` now runs every detector

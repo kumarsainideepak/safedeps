@@ -14,6 +14,16 @@ import type { OsvVuln } from '../src/utils/severity';
 // ── Fixtures ─────────────────────────────────────────────────────────────────
 
 const MOCK_OSV_RESPONSES: Record<string, OsvVuln[]> = {
+  'malware-pkg@1.0.0': [
+    {
+      id: 'MAL-2024-1234',
+      summary: 'Malicious package detected',
+      severity: [],
+      affected: [{ ranges: [] }],
+      references: [],
+      database_specific: { severity: 'UNKNOWN' },
+    },
+  ],
   'lodash@4.17.20': [
     {
       id: 'GHSA-jf85-cpcp-j695',
@@ -145,6 +155,16 @@ describe('scanCVEs() — with mocked OSV API', () => {
     );
     assert.equal(result.scanned, 2);
     assert.equal(result.skipped, 1);
+  });
+
+  it('includes UNKNOWN severity vulns regardless of minSeverity filter', async () => {
+    const result = await scanCVEs(
+      makePkg({ 'malware-pkg': '1.0.0' }),
+      { minSeverity: 'high', queryFn: mockQueryOSV },
+    );
+    assert.equal(result.findings.length, 1);
+    assert.equal(result.findings[0].name, 'malware-pkg');
+    assert.equal(result.findings[0].topSeverity, 'UNKNOWN');
   });
 
   it('propagates OSV query errors as thrown Error', async () => {

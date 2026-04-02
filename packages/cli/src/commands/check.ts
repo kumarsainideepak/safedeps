@@ -1,6 +1,7 @@
 import { Command } from 'commander';
 import { analysePackage, enrichWithAuthenticity } from '../detectors/typosquat';
 import { scanCVEs } from '../detectors/cve';
+import { scanLicenses } from '../detectors/license';
 import { scanMaintainerHealth } from '../detectors/maintainer';
 import { fetchNpmLicense, fetchNpmPackumentInfo } from '../sources/npmRegistry';
 import { renderCheckReport } from '../reporters/terminal';
@@ -109,14 +110,19 @@ export default function registerCheckCommand(program: Command): void {
       };
       const lockVersions = new Map([[name, resolvedVersion]]);
 
-      const [cveSettled, maintainerSettled] = await Promise.allSettled([
+      const [cveSettled, licenseSettled, maintainerSettled] = await Promise.allSettled([
         scanCVEs(syntheticParsed, { lockVersions }),
+        scanLicenses(syntheticParsed, { lockVersions, projectLicense: license ?? undefined }),
         scanMaintainerHealth(syntheticParsed, { lockVersions }),
       ]);
 
       const cveResult = cveSettled.status === 'fulfilled'
         ? cveSettled.value
         : { findings: [], scanned: 0, skipped: 0, error: (cveSettled.reason as Error).message };
+
+      const licenseResult = licenseSettled.status === 'fulfilled'
+        ? licenseSettled.value
+        : null;
 
       const maintainerResult = maintainerSettled.status === 'fulfilled'
         ? maintainerSettled.value
@@ -144,8 +150,9 @@ export default function registerCheckCommand(program: Command): void {
                 dismissed:    enriched.authenticity?.dismissed ?? false,
               }
             : null,
-          cve:        cveResult,
-          maintainer: maintainerResult,
+          cve:               cveResult,
+          licenseCompliance: licenseResult,
+          maintainer:        maintainerResult,
           durationMs,
         }, null, 2));
         return;
@@ -162,6 +169,7 @@ export default function registerCheckCommand(program: Command): void {
         maintainerNames,
         typosquatFinding:  enriched,
         cveResult,
+        licenseResult,
         maintainerResult,
         durationMs,
       });

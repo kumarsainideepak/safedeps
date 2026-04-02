@@ -8,6 +8,7 @@ import type { ParsedPackageJson } from '../utils/packageParser';
 export interface CveFinding {
   name: string;
   version: string;
+  versionSource: 'lockfile' | 'range-floor' | 'unknown';
   vulnCount: number;
   topSeverity: string;
   vulns: NormalisedVuln[];
@@ -62,14 +63,22 @@ export async function scanCVEs(
 
   const toScan: OsvPackage[] = [];
   const skipped: string[]    = [];
+  const versionSourceMap     = new Map<string, CveFinding['versionSource']>();
 
   for (const name of allPackageNames) {
     // Prefer lockfile version (exact), fall back to range from package.json
-    let version = lockVersions.get(name);
+    const lockVersion = lockVersions.get(name);
+    let version: string | undefined;
+    let source: CveFinding['versionSource'];
 
-    if (!version) {
+    if (lockVersion) {
+      version = lockVersion;
+      source  = 'lockfile';
+    } else {
       const rawVersion = allDeps[name] ?? '';
-      version = _resolveVersionRange(rawVersion) ?? undefined;
+      const resolved   = _resolveVersionRange(rawVersion) ?? undefined;
+      version = resolved;
+      source  = resolved ? 'range-floor' : 'unknown';
     }
 
     if (!version) {
@@ -77,6 +86,7 @@ export async function scanCVEs(
       continue;
     }
 
+    versionSourceMap.set(name, source);
     toScan.push({ name, version });
   }
 
@@ -105,8 +115,11 @@ export async function scanCVEs(
     const normalisedVulns = result.vulns.map(normaliseVuln);
 
     // Filter by minSeverity
+    // UNKNOWN vulns (MAL-*, many GHSA advisories) always pass — severity is indeterminate
     const filtered = normalisedVulns.filter(v => {
-      const idx = severityOrder.indexOf(v.severity.toLowerCase());
+      const sev = v.severity.toLowerCase();
+      if (sev === 'unknown') return true;
+      const idx = severityOrder.indexOf(sev);
       return idx !== -1 && idx <= minIdx;
     });
 
@@ -119,11 +132,12 @@ export async function scanCVEs(
     );
 
     findings.push({
-      name:        result.name,
-      version:     result.version,
-      vulnCount:   filtered.length,
-      topSeverity: filtered[0].severity,
-      vulns:       filtered,
+      name:          result.name,
+      version:       result.version,
+      versionSource: versionSourceMap.get(result.name) ?? 'unknown',
+      vulnCount:     filtered.length,
+      topSeverity:   filtered[0].severity,
+      vulns:         filtered,
     });
   }
 

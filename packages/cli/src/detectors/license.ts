@@ -36,19 +36,22 @@ export interface LicenseFinding {
 }
 
 export interface LicenseResult {
-  projectLicense: string;
-  findings:       LicenseFinding[];
-  scanned:        number;
-  conflicts:      number;
-  warnings:       number;
-  unknowns:       number;
-  error?:         string;
+  projectLicense:  string;
+  findings:        LicenseFinding[];
+  scanned:         number;
+  conflicts:       number;
+  warnings:        number;
+  unknowns:        number;
+  includesDevDeps: boolean;
+  error?:          string;
 }
 
 export interface ScanLicenseOptions {
   projectPath?:    string;
   projectLicense?: string;  // override from --license flag
   lockVersions?:   Map<string, string>;
+  /** When true, include devDependencies in the scan. Default: false. */
+  includeDevDeps?: boolean;
 }
 
 // ─── Internal helpers ──────────────────────────────────────────────────────
@@ -100,16 +103,19 @@ export async function scanLicenses(
     projectPath    = process.cwd(),
     projectLicense: licenseOverride,
     lockVersions:  lockVersionsOpt,
+    includeDevDeps = false,
   } = options;
 
   // Determine the project's own license (CLI flag wins over package.json)
   const projectLicense = normaliseLicense(licenseOverride ?? parsedPackageJson.license);
 
-  // Only scan production dependencies — devDeps don't ship with the package
-  const packagesToScan = Object.keys(parsedPackageJson.dependencies);
+  // Only scan production dependencies by default; devDeps don't ship with the package
+  const packagesToScan = includeDevDeps
+    ? Object.keys({ ...parsedPackageJson.dependencies, ...parsedPackageJson.devDependencies })
+    : Object.keys(parsedPackageJson.dependencies);
 
   if (packagesToScan.length === 0) {
-    return { projectLicense, findings: [], scanned: 0, conflicts: 0, warnings: 0, unknowns: 0 };
+    return { projectLicense, findings: [], scanned: 0, conflicts: 0, warnings: 0, unknowns: 0, includesDevDeps: includeDevDeps };
   }
 
   const lockVersions = lockVersionsOpt ?? parseLockfile(projectPath);
@@ -185,5 +191,5 @@ export async function scanLicenses(
   const warnings  = findings.filter(f => f.status === 'warning').length;
   const unknowns  = findings.filter(f => f.status === 'unknown').length;
 
-  return { projectLicense, findings, scanned: packagesToScan.length, conflicts, warnings, unknowns };
+  return { projectLicense, findings, scanned: packagesToScan.length, conflicts, warnings, unknowns, includesDevDeps: includeDevDeps };
 }

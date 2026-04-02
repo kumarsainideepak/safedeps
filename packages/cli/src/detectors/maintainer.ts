@@ -33,6 +33,7 @@ import { extractGitHubRepo, fetchGitHubRepoInfo } from '../sources/githubApi';
 import type { NpmPackumentInfo } from '../sources/npmRegistry';
 import type { GitHubRepoInfo } from '../sources/githubApi';
 import type { ParsedPackageJson } from '../utils/packageParser';
+import type { SignalRegistry } from '../utils/signalRegistry';
 
 // ─── Public types ──────────────────────────────────────────────────────────
 
@@ -78,8 +79,9 @@ export interface MaintainerResult {
 }
 
 export interface ScanMaintainerOptions {
-  projectPath?:  string;
-  lockVersions?: Map<string, string>;
+  projectPath?:     string;
+  lockVersions?:    Map<string, string>;
+  signalRegistry?:  SignalRegistry;
 }
 
 // ─── Scoring (pure functions — fully testable) ─────────────────────────────
@@ -225,7 +227,7 @@ export async function scanMaintainerHealth(
   parsedPackageJson: ParsedPackageJson,
   options: ScanMaintainerOptions = {},
 ): Promise<MaintainerResult> {
-  const { projectPath = process.cwd(), lockVersions: lockVersionsOpt } = options;
+  const { projectPath = process.cwd(), lockVersions: lockVersionsOpt, signalRegistry } = options;
 
   // Only scan production dependencies
   const packagesToScan = Object.keys(parsedPackageJson.dependencies);
@@ -241,7 +243,17 @@ export async function scanMaintainerHealth(
 
   await _withConcurrency(packagesToScan, 8, async (name) => {
     try {
-      packumentMap.set(name, await fetchNpmPackumentInfo(name));
+      const packument = await fetchNpmPackumentInfo(name);
+      packumentMap.set(name, packument);
+      if (signalRegistry) {
+        signalRegistry.set(name, {
+          createdAt:        packument.createdAt,
+          publishedVersions: packument.publishedVersions,
+          maintainerCount:  packument.maintainers.length,
+          hasGitHubRepo:    packument.repositoryUrl != null,
+          existsOnNpm:      true,
+        });
+      }
     } catch {
       packumentMap.set(name, null);
     }
@@ -255,7 +267,11 @@ export async function scanMaintainerHealth(
     .filter(p => p.packument?.repositoryUrl != null);
 
   await _withConcurrency(withGitHub, 5, async ({ name, packument }) => {
-    githubMap.set(name, await _resolveGitHub(packument!.repositoryUrl));
+    const ghInfo = await _resolveGitHub(packument!.repositoryUrl);
+    githubMap.set(name, ghInfo);
+    if (signalRegistry && ghInfo) {
+      signalRegistry.set(name, { githubStars: ghInfo.stars });
+    }
   });
 
   // ── Phase 3: Fetch maintainer account ages (best-effort, concurrency 5) ──
@@ -267,7 +283,11 @@ export async function scanMaintainerHealth(
       accountAgeMap.set(name, null);
       return;
     }
-    accountAgeMap.set(name, await _resolveMaintainerAge(packument.maintainers));
+    const ageDays = await _resolveMaintainerAge(packument.maintainers);
+    accountAgeMap.set(name, ageDays);
+    if (signalRegistry) {
+      signalRegistry.set(name, { accountAgeDays: ageDays });
+    }
   });
 
   // ── Phase 4: Build findings ──────────────────────────────────────────────

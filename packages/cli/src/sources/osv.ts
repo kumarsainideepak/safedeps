@@ -1,5 +1,6 @@
 import type { OsvVuln } from '../utils/severity';
 import { USER_AGENT } from '../utils/constants';
+import { fetchWithRetry } from '../utils/httpRetry';
 
 /**
  * OSV.dev API client
@@ -74,20 +75,18 @@ async function _querySingleBatch(packages: OsvPackage[]): Promise<OsvResult[]> {
 
   let response: Response;
   try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
-
-    response = await fetch(OSV_BATCH_URL, {
-      method:  'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'User-Agent':   USER_AGENT,
+    response = await fetchWithRetry(
+      OSV_BATCH_URL,
+      {
+        method:  'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'User-Agent':   USER_AGENT,
+        },
+        body,
       },
-      body,
-      signal:  controller.signal,
-    });
-
-    clearTimeout(timer);
+      { timeoutMs: TIMEOUT_MS },
+    );
   } catch (err) {
     if ((err as Error).name === 'AbortError') {
       throw new Error(`OSV.dev API timed out after ${TIMEOUT_MS}ms`);

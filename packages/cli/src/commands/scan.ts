@@ -11,6 +11,7 @@ import { scanMaintainerHealth } from '../detectors/maintainer';
 import type { MaintainerResult } from '../detectors/maintainer';
 import { renderFullReport } from '../reporters/terminal';
 import type { ScanResult } from '../reporters/terminal';
+import { SignalRegistry } from '../utils/signalRegistry';
 
 interface ScanOptions {
   path: string;
@@ -19,6 +20,7 @@ interface ScanOptions {
   license?: string;
   offline?: boolean;
   failOn?: string;
+  includeDev?: boolean;
 }
 
 /**
@@ -46,6 +48,7 @@ export default function registerScanCommand(program: Command): void {
     .option('-L, --license <spdx>',   'Project license (overrides package.json)')
     .option('--offline',              'Skip CVE scan (no network calls)')
     .option('--fail-on <level>',      'Exit with code 1 if issues found at this level')
+    .option('--include-dev',          'Include devDependencies in license scan')
     .action(async (options: ScanOptions) => {
       const projectPath = path.resolve(options.path);
 
@@ -77,6 +80,9 @@ export default function registerScanCommand(program: Command): void {
       // Parse lockfile once — shared across all detectors to avoid 3× I/O
       const lockVersions = parseLockfile(projectPath);
 
+      // Shared signal registry — collects per-package signals from maintainer detector
+      const signalRegistry = new SignalRegistry();
+
       // ── 3. Run detectors concurrently ─────────────────────────────────
       const rawTyposquatFindings = scanPackages(parsed.allPackages);
 
@@ -92,13 +98,13 @@ export default function registerScanCommand(program: Command): void {
         options.offline
           ? Promise.resolve<CveResult | null>(null)
           : scanCVEs(parsed, { projectPath, minSeverity: options.severity, lockVersions }),
-        scanLicenses(parsed, { projectPath, projectLicense: options.license, lockVersions }),
+        scanLicenses(parsed, { projectPath, projectLicense: options.license, lockVersions, includeDevDeps: options.includeDev }),
         options.offline
           ? Promise.resolve<MaintainerResult | null>(null)
-          : scanMaintainerHealth(parsed, { projectPath, lockVersions }),
+          : scanMaintainerHealth(parsed, { projectPath, lockVersions, signalRegistry }),
         options.offline
           ? Promise.resolve(rawTyposquatFindings)
-          : enrichWithAuthenticity(rawTyposquatFindings),
+          : enrichWithAuthenticity(rawTyposquatFindings, { signalRegistry }),
       ]);
 
       spinner?.stop();
@@ -120,8 +126,9 @@ export default function registerScanCommand(program: Command): void {
         licenseSettled.status === 'fulfilled'
           ? licenseSettled.value
           : {
-              projectLicense: options.license ?? parsed.license ?? 'UNKNOWN',
+              projectLicense:  options.license ?? parsed.license ?? 'UNKNOWN',
               findings: [], scanned: 0, conflicts: 0, warnings: 0, unknowns: 0,
+              includesDevDeps: options.includeDev ?? false,
               error: (licenseSettled.reason as Error).message,
             };
 

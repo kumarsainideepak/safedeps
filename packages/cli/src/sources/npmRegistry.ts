@@ -14,6 +14,7 @@
  */
 
 import { USER_AGENT } from '../utils/constants';
+import { fetchWithRetry } from '../utils/httpRetry';
 
 const REGISTRY_BASE = 'https://registry.npmjs.org';
 const TIMEOUT_MS    = 8_000;
@@ -52,24 +53,19 @@ export async function fetchNpmLicense(
 ): Promise<NpmPackageMetadata> {
   const url = registryUrl(name, version);
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
-
   let response: Response;
   try {
-    response = await fetch(url, {
-      headers: { Accept: 'application/json', 'User-Agent': USER_AGENT },
-      signal:  controller.signal,
-    });
+    response = await fetchWithRetry(
+      url,
+      { headers: { Accept: 'application/json', 'User-Agent': USER_AGENT } },
+      { timeoutMs: TIMEOUT_MS },
+    );
   } catch (err) {
-    clearTimeout(timer);
     if ((err as Error).name === 'AbortError') {
       throw new Error(`npm registry timed out for ${name}`);
     }
     throw new Error(`npm registry network error for ${name}: ${(err as Error).message}`);
   }
-
-  clearTimeout(timer);
 
   if (!response.ok) {
     throw new Error(`npm registry returned HTTP ${response.status} for ${name}`);
@@ -132,21 +128,17 @@ export async function fetchNpmPackumentInfo(name: string): Promise<NpmPackumentI
     ? `${REGISTRY_BASE}/@${encodeURIComponent(name.slice(1))}`
     : `${REGISTRY_BASE}/${name}`;
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 15_000);
-
   let response: Response;
   try {
-    response = await fetch(url, {
-      headers: { Accept: 'application/json', 'User-Agent': USER_AGENT },
-      signal:  controller.signal,
-    });
+    response = await fetchWithRetry(
+      url,
+      { headers: { Accept: 'application/json', 'User-Agent': USER_AGENT } },
+      { timeoutMs: 15_000 },
+    );
   } catch (err) {
-    clearTimeout(timer);
     if ((err as Error).name === 'AbortError') throw new Error(`npm registry timed out for ${name}`);
     throw new Error(`npm registry network error for ${name}: ${(err as Error).message}`);
   }
-  clearTimeout(timer);
 
   if (!response.ok) throw new Error(`npm registry returned HTTP ${response.status} for ${name}`);
 
@@ -215,15 +207,12 @@ function _extractRepositoryUrl(repo: unknown): string | null {
 export async function fetchNpmAccountAge(username: string): Promise<Date | null> {
   const url = `${REGISTRY_BASE}/-/user/org.couchdb.user/${encodeURIComponent(username)}`;
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 6_000);
-
   try {
-    const response = await fetch(url, {
-      headers: { Accept: 'application/json', 'User-Agent': USER_AGENT },
-      signal:  controller.signal,
-    });
-    clearTimeout(timer);
+    const response = await fetchWithRetry(
+      url,
+      { headers: { Accept: 'application/json', 'User-Agent': USER_AGENT } },
+      { timeoutMs: 6_000 },
+    );
 
     if (!response.ok) return null;
 
@@ -234,7 +223,6 @@ export async function fetchNpmAccountAge(username: string): Promise<Date | null>
     const d = new Date(dateStr);
     return isNaN(d.getTime()) ? null : d;
   } catch {
-    clearTimeout(timer);
     return null;
   }
 }
