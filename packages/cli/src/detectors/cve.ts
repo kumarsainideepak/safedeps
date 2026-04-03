@@ -6,12 +6,20 @@ import type { NormalisedVuln } from '../utils/severity';
 import type { ParsedPackageJson } from '../utils/packageParser';
 
 export interface CveFinding {
-  name: string;
-  version: string;
+  name:          string;
+  version:       string;
   versionSource: 'lockfile' | 'range-floor' | 'unknown';
-  vulnCount: number;
-  topSeverity: string;
-  vulns: NormalisedVuln[];
+  vulnCount:     number;
+  topSeverity:   string;
+  vulns:         NormalisedVuln[];
+  // Verbose-enrichment fields (derived from top-severity vuln, always populated)
+  aliases?:       string[];
+  cvssScore?:     number | null;
+  cvssVector?:    string | null;
+  affectedRange?: string | null;
+  fixedIn?:       string | null;
+  published?:     string | null;
+  details?:       string | null;
 }
 
 export interface CveResult {
@@ -131,13 +139,21 @@ export async function scanCVEs(
       severityOrder.indexOf(b.severity.toLowerCase())
     );
 
+    const topVuln = filtered[0];
     findings.push({
       name:          result.name,
       version:       result.version,
       versionSource: versionSourceMap.get(result.name) ?? 'unknown',
       vulnCount:     filtered.length,
-      topSeverity:   filtered[0].severity,
+      topSeverity:   topVuln.severity,
       vulns:         filtered,
+      aliases:       topVuln.aliases.length > 0 ? topVuln.aliases : undefined,
+      cvssScore:     topVuln.cvssScore,
+      cvssVector:    topVuln.cvssVector,
+      affectedRange: topVuln.affectedRange,
+      fixedIn:       topVuln.fixedIn[0] ?? null,
+      published:     topVuln.published,
+      details:       topVuln.details,
     });
   }
 

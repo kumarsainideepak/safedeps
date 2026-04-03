@@ -18,6 +18,7 @@ export interface CheckReport {
   licenseResult:    LicenseResult | null;
   maintainerResult: MaintainerResult | null;
   durationMs:       number;
+  verbose?:         boolean;
 }
 
 /**
@@ -66,6 +67,7 @@ export interface ScanResult {
   licenseResult:     LicenseResult | null;
   maintainerResult:  MaintainerResult | null;
   durationMs:        number;
+  verbose?:          boolean;
 }
 
 /**
@@ -74,7 +76,7 @@ export interface ScanResult {
 export async function renderFullReport(scanResult: ScanResult): Promise<void> {
   const chalk = await getChalk();
 
-  const { projectName, totalScanned, typosquatFindings, cveResult, licenseResult, maintainerResult, durationMs } = scanResult;
+  const { projectName, totalScanned, typosquatFindings, cveResult, licenseResult, maintainerResult, durationMs, verbose = false } = scanResult;
 
   console.log('');
   console.log(
@@ -90,15 +92,15 @@ export async function renderFullReport(scanResult: ScanResult): Promise<void> {
     console.log('');
 
     if (cveResult) {
-      renderCveSection(chalk, cveResult);
+      renderCveSection(chalk, cveResult, verbose);
     }
 
     if (licenseResult) {
-      renderLicenseSection(chalk, licenseResult);
+      renderLicenseSection(chalk, licenseResult, verbose);
     }
 
     if (maintainerResult) {
-      renderMaintainerSection(chalk, maintainerResult);
+      renderMaintainerSection(chalk, maintainerResult, verbose);
     }
 
     printSummary(chalk, totalScanned, typosquatFindings, cveResult, licenseResult, maintainerResult, durationMs);
@@ -134,17 +136,17 @@ export async function renderFullReport(scanResult: ScanResult): Promise<void> {
 
   // ── CVE section ────────────────────────────────────────────────────────
   if (cveResult) {
-    renderCveSection(chalk, cveResult);
+    renderCveSection(chalk, cveResult, verbose);
   }
 
   // ── License section ────────────────────────────────────────────────────
   if (licenseResult) {
-    renderLicenseSection(chalk, licenseResult);
+    renderLicenseSection(chalk, licenseResult, verbose);
   }
 
   // ── Maintainer section ─────────────────────────────────────────────────
   if (maintainerResult) {
-    renderMaintainerSection(chalk, maintainerResult);
+    renderMaintainerSection(chalk, maintainerResult, verbose);
   }
 
   printSummary(chalk, totalScanned, typosquatFindings, cveResult, licenseResult, maintainerResult, durationMs);
@@ -173,7 +175,7 @@ function buildFindingMessage(chalk: ChalkInstance, finding: TyposquatFinding): s
  * Renders the CVE vulnerability section.
  * Shows each vulnerable package and its top CVE identifiers.
  */
-function renderCveSection(chalk: ChalkInstance, result: CveResult): void {
+function renderCveSection(chalk: ChalkInstance, result: CveResult, verbose: boolean): void {
   const scannedLabel = result.scanned > 0 ? `scanned ${result.scanned}` : 'no versions resolved';
   const skippedNote  = result.skipped > 0 ? chalk.dim(`, ${result.skipped} skipped`) : '';
 
@@ -229,21 +231,73 @@ function renderCveSection(chalk: ChalkInstance, result: CveResult): void {
 
     console.log(`  ${severityCol}${packageCol}${cveList}`);
 
-    // Show fix version if available
-    const firstFix = cveFinding.vulns.find(v => v.fixedIn.length > 0);
-    if (firstFix) {
-      console.log(chalk.dim(`  ${''.padEnd(COL_SEV + COL_PKG)}Fix available: `) + chalk.green(firstFix.fixedIn[0]));
+    if (verbose) {
+      // OSV permalink for the top vuln
+      _indent(chalk, chalk.dim('OSV:       ') + `https://osv.dev/vulnerability/${cveFinding.vulns[0].id}`);
+
+      // NVD link for each CVE alias
+      for (const alias of (cveFinding.aliases ?? [])) {
+        if (alias.startsWith('CVE-')) {
+          _indent(chalk, chalk.dim('NVD:       ') + `https://nvd.nist.gov/vuln/detail/${alias}`);
+        }
+      }
+
+      // CVSS score + vector
+      if (cveFinding.cvssScore !== null && cveFinding.cvssScore !== undefined) {
+        const vectorStr = cveFinding.cvssVector ? chalk.dim(` (${cveFinding.cvssVector})`) : '';
+        _indent(chalk, chalk.dim('CVSS:      ') + chalk.white(String(cveFinding.cvssScore)) + vectorStr);
+      }
+
+      // Affected version range
+      if (cveFinding.affectedRange) {
+        _indent(chalk, chalk.dim('Affects:   ') + cveFinding.affectedRange);
+      }
+
+      // Fix version
+      if (cveFinding.fixedIn) {
+        _indent(chalk, chalk.dim('Fixed in:  ') + chalk.green(cveFinding.fixedIn));
+      } else {
+        _indent(chalk, chalk.dim('Fixed in:  ') + chalk.yellow('No fix available'));
+      }
+
+      // Published date (trim to YYYY-MM-DD)
+      if (cveFinding.published) {
+        _indent(chalk, chalk.dim('Published: ') + cveFinding.published.slice(0, 10));
+      }
+
+      // Description
+      if (cveFinding.details) {
+        const truncated = cveFinding.details.length > 300
+          ? cveFinding.details.slice(0, 300) + '…'
+          : cveFinding.details;
+        _indent(chalk, chalk.dim('Details:   ') + truncated);
+      }
+
+      // Per-finding range-floor warning
+      if (cveFinding.versionSource === 'range-floor') {
+        _indent(chalk, chalk.yellow('⚠ Version resolved via range floor — results may over-report'));
+      }
+
+      console.log('');
+    } else {
+      // Non-verbose: show fix version on continuation line
+      const firstFix = cveFinding.vulns.find(v => v.fixedIn.length > 0);
+      if (firstFix) {
+        console.log(chalk.dim(`  ${''.padEnd(COL_SEV + COL_PKG)}Fix available: `) + chalk.green(firstFix.fixedIn[0]));
+      }
     }
   }
 
-  // Warn when range-floor versioning was used — results may over-report CVEs
-  const rangeFlorCount = result.findings.filter(
-    (f: CveFinding) => f.versionSource === 'range-floor',
-  ).length;
-  if (rangeFlorCount > 0) {
-    console.log(
-      chalk.yellow(`  ⚠ ${rangeFlorCount} package${rangeFlorCount > 1 ? 's have' : ' has'} no lockfile version — using range floor (may over-report CVEs). Run 'npm install' for precise version resolution.`),
-    );
+  // Aggregate range-floor warning (non-verbose only, verbose shows per-finding)
+  if (!verbose) {
+    const rangeFlorCount = result.findings.filter(
+      (f: CveFinding) => f.versionSource === 'range-floor',
+    ).length;
+    if (rangeFlorCount > 0) {
+      console.log(
+        chalk.yellow(`  ⚠ ${rangeFlorCount} package${rangeFlorCount > 1 ? 's have' : ' has'} no lockfile version — using range floor (may over-report CVEs). Run 'npm install' for precise version resolution.`),
+      );
+    }
   }
 
   console.log('');
@@ -254,7 +308,7 @@ function renderCveSection(chalk: ChalkInstance, result: CveResult): void {
  * Only prints packages with conflict / warning / unknown status — clean
  * packages are counted in the summary line to keep output readable.
  */
-function renderLicenseSection(chalk: ChalkInstance, result: LicenseResult): void {
+function renderLicenseSection(chalk: ChalkInstance, result: LicenseResult, verbose: boolean): void {
   const devNote = result.includesDevDeps ? ' (incl. dev)' : '';
   console.log(
     chalk.bold.blue('  License Compliance') +
@@ -310,16 +364,32 @@ function renderLicenseSection(chalk: ChalkInstance, result: LicenseResult): void
     const reason     = chalk.dim(f.reason);
 
     console.log(`  ${statusCol}${packageCol}${licenseCol}${reason}`);
+
+    if (verbose) {
+      if (f.spdxUrl) {
+        _indent(chalk, chalk.dim('SPDX:         ') + f.spdxUrl);
+      }
+      if (f.tldrUrl) {
+        _indent(chalk, chalk.dim('tl;dr Legal:  ') + f.tldrUrl);
+      }
+      if (f.compatibilityExplanation) {
+        _indent(chalk, chalk.dim('Why:          ') + f.compatibilityExplanation);
+      }
+      if (f.rawLicense !== f.normalizedLicense && f.rawLicense !== 'none') {
+        _indent(chalk, chalk.dim('Raw SPDX:     ') + chalk.cyan(f.rawLicense));
+      }
+      console.log('');
+    }
   }
 
-  console.log('');
+  if (!verbose) console.log('');
 }
 
 /**
  * Renders the maintainer health section.
  * Only prints packages with high or medium risk — healthy ones are counted in summary.
  */
-function renderMaintainerSection(chalk: ChalkInstance, result: MaintainerResult): void {
+function renderMaintainerSection(chalk: ChalkInstance, result: MaintainerResult, verbose: boolean): void {
   console.log(
     chalk.bold.blue('  Maintainer Health') +
     chalk.dim(` — scanned ${result.scanned} dependencies`)
@@ -360,9 +430,35 @@ function renderMaintainerSection(chalk: ChalkInstance, result: MaintainerResult)
     const signals    = chalk.dim(_buildMaintainerSignalSummary(f));
 
     console.log(`  ${riskCol}${packageCol}${scoreCol}${signals}`);
+
+    if (verbose) {
+      _indent(chalk, chalk.dim('npm:              ') + f.npmUrl);
+
+      if (f.githubUrl) {
+        _indent(chalk, chalk.dim('GitHub:           ') + f.githubUrl);
+      }
+
+      if (f.maintainerNames.length > 0) {
+        for (const m of f.maintainerNames) {
+          _indent(chalk, chalk.dim('maintainer:       ') + `https://www.npmjs.com/~${m}`);
+        }
+      }
+
+      const bd = f.breakdown;
+      _indent(chalk, chalk.dim('Score breakdown:  ') +
+        chalk.dim(`Recency ${bd.recency}/30`) + chalk.dim(' · ') +
+        chalk.dim(`Maintainers ${bd.maintainerCount}/20`) + chalk.dim(' · ') +
+        chalk.dim(`Acct age ${bd.accountAge}/20`) + chalk.dim(' · ') +
+        chalk.dim(`GitHub ${bd.githubActivity}/15`) + chalk.dim(' · ') +
+        chalk.dim(`Issues ${bd.issueHealth}/10`) + chalk.dim(' · ') +
+        chalk.dim(`Popularity ${bd.popularity}/5`)
+      );
+
+      console.log('');
+    }
   }
 
-  console.log('');
+  if (!verbose) console.log('');
 }
 
 /** Builds a compact signal summary string for one maintainer finding. */
@@ -406,6 +502,11 @@ function _buildMaintainerSignalSummary(f: MaintainerFinding): string {
 function _chalkColor(chalk: ChalkInstance, color: string): ChalkInstance {
   const fn = (chalk as unknown as Record<string, unknown>)[color];
   return typeof fn === 'function' ? fn as ChalkInstance : chalk;
+}
+
+/** Prints a single verbose detail line indented under a finding row. */
+function _indent(chalk: ChalkInstance, line: string): void {
+  console.log(chalk.dim('    ↳ ') + line);
 }
 
 /** Prints the summary footer line. */
@@ -475,7 +576,7 @@ export async function renderCheckReport(report: CheckReport): Promise<void> {
   const {
     name, requestedVersion, resolvedVersion, license,
     weeklyDownloads, ageInDays, publishedVersions, maintainerNames,
-    typosquatFinding, cveResult, licenseResult, maintainerResult, durationMs,
+    typosquatFinding, cveResult, licenseResult, maintainerResult, durationMs, verbose = false,
   } = report;
 
   const displayVersion = requestedVersion ?? resolvedVersion;
@@ -583,17 +684,17 @@ export async function renderCheckReport(report: CheckReport): Promise<void> {
 
   // ── CVE Vulnerabilities ───────────────────────────────────────────────
   if (cveResult) {
-    renderCveSection(chalk, cveResult);
+    renderCveSection(chalk, cveResult, verbose);
   }
 
   // ── License Compliance ────────────────────────────────────────────────
   if (licenseResult) {
-    renderLicenseSection(chalk, licenseResult);
+    renderLicenseSection(chalk, licenseResult, verbose);
   }
 
   // ── Maintainer Health ─────────────────────────────────────────────────
   if (maintainerResult) {
-    renderMaintainerSection(chalk, maintainerResult);
+    renderMaintainerSection(chalk, maintainerResult, verbose);
   }
 
   console.log(chalk.dim(`  Completed in ${durationMs}ms`));

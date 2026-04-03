@@ -60,14 +60,15 @@ export interface ScoreBreakdown {
 }
 
 export interface MaintainerFinding {
-  name:        string;
-  version:     string;
-  score:       number;       // 0–100
-  risk:        MaintainerRisk;
-  signals:     MaintainerSignals;
-  breakdown:   ScoreBreakdown;
-  npmUrl:      string;
-  githubUrl:   string | null;
+  name:             string;
+  version:          string;
+  score:            number;       // 0–100
+  risk:             MaintainerRisk;
+  signals:          MaintainerSignals;
+  breakdown:        ScoreBreakdown;
+  npmUrl:           string;
+  githubUrl:        string | null;
+  maintainerNames:  string[];     // npm usernames from packument.maintainers[]
 }
 
 export interface MaintainerResult {
@@ -321,8 +322,9 @@ export async function scanMaintainerHealth(
       risk,
       signals,
       breakdown,
-      npmUrl:    `https://www.npmjs.com/package/${name}`,
-      githubUrl: github?.htmlUrl ?? null,
+      npmUrl:           `https://www.npmjs.com/package/${name}`,
+      githubUrl:        github?.htmlUrl ?? null,
+      maintainerNames:  packument?.maintainers.map(m => m.name) ?? [],
     });
   }
 

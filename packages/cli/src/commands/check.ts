@@ -9,6 +9,7 @@ import type { ParsedPackageJson } from '../utils/packageParser';
 
 interface CheckOptions {
   output: string;
+  verbose?: boolean;
 }
 
 /**
@@ -29,6 +30,7 @@ export default function registerCheckCommand(program: Command): void {
     .command('check <packageName>')
     .description('Run a full security check on a single package (typosquat, CVE, license, maintainer)')
     .option('-O, --output <format>', 'Output format: terminal | json', 'terminal')
+    .option('-v, --verbose',         'Show enriched output with links and extended detail')
     .action(async (packageName: string, options: CheckOptions) => {
       const start = Date.now();
 
@@ -172,6 +174,7 @@ export default function registerCheckCommand(program: Command): void {
         licenseResult,
         maintainerResult,
         durationMs,
+        verbose:           options.verbose ?? false,
       });
     });
 }

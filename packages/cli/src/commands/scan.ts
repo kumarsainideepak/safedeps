@@ -21,6 +21,7 @@ interface ScanOptions {
   offline?: boolean;
   failOn?: string;
   includeDev?: boolean;
+  verbose?: boolean;
 }
 
 /**
@@ -49,6 +50,7 @@ export default function registerScanCommand(program: Command): void {
     .option('--offline',              'Skip CVE scan (no network calls)')
     .option('--fail-on <level>',      'Exit with code 1 if issues found at this level')
     .option('--include-dev',          'Include devDependencies in license scan')
+    .option('-v, --verbose',          'Show enriched output with links and extended detail')
     .action(async (options: ScanOptions) => {
       const projectPath = path.resolve(options.path);
 
@@ -148,6 +150,7 @@ export default function registerScanCommand(program: Command): void {
         licenseResult,
         maintainerResult,
         durationMs,
+        verbose:           options.verbose ?? false,
       };
 
       // ── 4. Render output ───────────────────────────────────────────────

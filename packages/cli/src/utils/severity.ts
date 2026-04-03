@@ -43,6 +43,8 @@ export interface OsvReference {
 
 export interface OsvVuln {
   id?: string;
+  aliases?: string[];
+  published?: string;
   summary?: string;
   details?: string;
   severity?: OsvSeverityEntry[];
@@ -52,23 +54,32 @@ export interface OsvVuln {
 }
 
 export interface NormalisedVuln {
-  id: string;
-  title: string;
-  severity: string;
-  cvssScore: number | null;
-  fixedIn: string[];
-  url: string;
+  id:            string;
+  title:         string;
+  severity:      string;
+  cvssScore:     number | null;
+  cvssVector:    string | null;
+  fixedIn:       string[];
+  affectedRange: string | null;
+  aliases:       string[];
+  published:     string | null;
+  details:       string | null;
+  url:           string;
 }
 
 export function normaliseVuln(vuln: OsvVuln): NormalisedVuln {
-  const id      = vuln.id ?? 'UNKNOWN';
-  const title   = vuln.summary ?? vuln.details?.slice(0, 100) ?? 'No description available';
-  const fixedIn = _extractFixVersions(vuln);
-  const url     = _extractAdvisoryUrl(vuln, id);
+  const id            = vuln.id ?? 'UNKNOWN';
+  const title         = vuln.summary ?? vuln.details?.slice(0, 100) ?? 'No description available';
+  const fixedIn       = _extractFixVersions(vuln);
+  const affectedRange = _extractAffectedRange(vuln);
+  const url           = _extractAdvisoryUrl(vuln, id);
+  const aliases       = vuln.aliases ?? [];
+  const published     = vuln.published ?? null;
+  const details       = vuln.details ?? null;
 
-  const { severity, cvssScore } = _extractSeverity(vuln);
+  const { severity, cvssScore, cvssVector } = _extractSeverity(vuln);
 
-  return { id, title, severity, cvssScore, fixedIn, url };
+  return { id, title, severity, cvssScore, cvssVector, fixedIn, affectedRange, aliases, published, details, url };
 }
 
 /**
@@ -79,14 +90,14 @@ export function normaliseVuln(vuln: OsvVuln): NormalisedVuln {
  *   2. database_specific.severity string → map to level
  *   3. Fall back to UNKNOWN
  */
-function _extractSeverity(vuln: OsvVuln): { severity: string; cvssScore: number | null } {
+function _extractSeverity(vuln: OsvVuln): { severity: string; cvssScore: number | null; cvssVector: string | null } {
   // Try CVSS vector strings first (most precise)
   if (Array.isArray(vuln.severity)) {
     for (const s of vuln.severity) {
       if (s.score) {
         const score = _parseCvssScore(s.score);
         if (score !== null) {
-          return { severity: _cvssScoreToLevel(score), cvssScore: score };
+          return { severity: _cvssScoreToLevel(score), cvssScore: score, cvssVector: s.score };
         }
       }
     }
@@ -95,16 +106,16 @@ function _extractSeverity(vuln: OsvVuln): { severity: string; cvssScore: number 
   // Fall back to database_specific.severity string
   const dbSeverity = vuln.database_specific?.severity?.toUpperCase();
   if (dbSeverity && (SEVERITY_LEVELS as readonly string[]).includes(dbSeverity)) {
-    return { severity: dbSeverity, cvssScore: null };
+    return { severity: dbSeverity, cvssScore: null, cvssVector: null };
   }
 
   // Last resort — check ecosystem_specific
   const ecoSeverity = vuln.affected?.[0]?.ecosystem_specific?.severity?.toUpperCase();
   if (ecoSeverity && (SEVERITY_LEVELS as readonly string[]).includes(ecoSeverity)) {
-    return { severity: ecoSeverity, cvssScore: null };
+    return { severity: ecoSeverity, cvssScore: null, cvssVector: null };
   }
 
-  return { severity: 'UNKNOWN', cvssScore: null };
+  return { severity: 'UNKNOWN', cvssScore: null, cvssVector: null };
 }
 
 /**
@@ -212,6 +223,45 @@ function _extractFixVersions(vuln: OsvVuln): string[] {
   }
 
   return [...fixes];
+}
+
+/**
+ * Builds a human-readable affected version range string from OSV affected ranges.
+ * Walks ECOSYSTEM-type ranges and formats introduced/fixed pairs.
+ * Returns null if no ECOSYSTEM range exists.
+ *
+ * Example output: ">= 0.8.1, < 1.0.0" or ">= 0.8.1, < 1.0.0 | >= 2.0.0, < 2.1.3"
+ */
+function _extractAffectedRange(vuln: OsvVuln): string | null {
+  const segments: string[] = [];
+
+  for (const affected of (vuln.affected ?? [])) {
+    for (const range of (affected.ranges ?? [])) {
+      if (range.type !== 'ECOSYSTEM') continue;
+
+      let introduced: string | null = null;
+      const pairs: string[] = [];
+
+      for (const event of (range.events ?? [])) {
+        if (event.introduced !== undefined) {
+          introduced = event.introduced;
+        } else if (event.fixed !== undefined && introduced !== null) {
+          const intro = introduced === '0' ? '0.0.0' : introduced;
+          pairs.push(`>= ${intro}, < ${event.fixed}`);
+          introduced = null;
+        }
+      }
+
+      // Open-ended range (introduced but no fixed)
+      if (introduced !== null && introduced !== '0') {
+        pairs.push(`>= ${introduced}`);
+      }
+
+      segments.push(...pairs);
+    }
+  }
+
+  return segments.length > 0 ? segments.join(' | ') : null;
 }
 
 /**

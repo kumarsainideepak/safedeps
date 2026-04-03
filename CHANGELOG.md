@@ -5,6 +5,52 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [v0.0.3] — 2026-04-03
+
+### Added
+- **`-v` / `--verbose` flag for `scan` and `check`**: Enriches terminal output with
+  navigable links and extended detail across all three detector sections. Populate
+  fields unconditionally at detection time; the renderer gates display on the flag.
+- **CVE verbose detail block**: When `--verbose` is active, each CVE finding shows:
+  - OSV.dev advisory permalink
+  - NVD links for every CVE alias (e.g. `CVE-2021-23337`)
+  - CVSS score and full vector string
+  - Affected version range (formatted from OSV ECOSYSTEM ranges)
+  - Fixed-in version
+  - Published date
+  - Truncated advisory description (300 chars)
+- **License verbose detail block**: When `--verbose` is active, each license finding shows:
+  - SPDX.org license reference URL
+  - tldrlegal.com plain-English summary URL (for 20 well-known licenses)
+  - Plain-English compatibility explanation for conflicts and warnings
+  - Raw SPDX expression when it differs from the normalised identifier
+- **Maintainer verbose detail block**: When `--verbose` is active, each maintainer
+  finding shows: npm package URL, GitHub repository URL, npm profile links per
+  maintainer username, and score breakdown (recency / maintainerCount / accountAge /
+  githubActivity / issueHealth / popularity).
+- **`NormalisedVuln` enriched fields** (`src/utils/severity.ts`): Added `cvssVector`,
+  `affectedRange`, `aliases`, `published`, and `details` fields. `_extractAffectedRange()`
+  walks ECOSYSTEM-type OSV ranges and formats introduced/fixed pairs. `_extractAdvisoryUrl()`
+  selects the best advisory URL with preference order GHSA > NVD > ADVISORY type >
+  ID-based fallback. Zero additional network calls — all data was already present in
+  the OSV API response.
+- **`CveFinding` verbose fields** (`src/detectors/cve.ts`): Optional `aliases`,
+  `cvssScore`, `cvssVector`, `affectedRange`, `fixedIn`, `published`, and `details`
+  fields populated from the top-severity vulnerability in each finding.
+- **`LicenseFinding` verbose fields** (`src/detectors/license.ts`): Optional `spdxUrl`,
+  `tldrUrl`, and `compatibilityExplanation` fields, plus a `TLDR_SLUGS` map covering
+  20 well-known SPDX identifiers.
+- **`MaintainerFinding.maintainerNames`** (`src/detectors/maintainer.ts`): Array of npm
+  usernames sourced from `packument.maintainers[]`, used by the verbose renderer to
+  generate npm profile links.
+
+### Changed
+- **Terminal renderer** (`src/reporters/terminal.ts`): Added `_indent()` helper for
+  indented sub-lines under findings. `ScanResult` and `CheckReport` interfaces now
+  carry `verbose?: boolean`. `renderCheckReport()` accepts and passes `licenseResult`.
+
+---
+
 ## [v0.0.2] — 2026-04-02
 
 ### Added
