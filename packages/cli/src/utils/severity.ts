@@ -67,6 +67,18 @@ export interface NormalisedVuln {
   url:           string;
 }
 
+/** Maps non-standard severity labels (e.g. GHSA's "MODERATE") to our canonical levels. */
+const SEVERITY_ALIAS: Record<string, string> = {
+  MODERATE: 'MEDIUM',
+  NONE:     'LOW',
+};
+
+function _normaliseSeverityAlias(raw: string | undefined | null): string | null {
+  if (!raw) return null;
+  const upper = raw.toUpperCase();
+  return SEVERITY_ALIAS[upper] ?? upper;
+}
+
 export function normaliseVuln(vuln: OsvVuln): NormalisedVuln {
   const id            = vuln.id ?? 'UNKNOWN';
   const title         = vuln.summary ?? vuln.details?.slice(0, 100) ?? 'No description available';
@@ -104,13 +116,14 @@ function _extractSeverity(vuln: OsvVuln): { severity: string; cvssScore: number 
   }
 
   // Fall back to database_specific.severity string
-  const dbSeverity = vuln.database_specific?.severity?.toUpperCase();
+  // GHSA uses "MODERATE" instead of "MEDIUM" — normalise before matching
+  const dbSeverity = _normaliseSeverityAlias(vuln.database_specific?.severity);
   if (dbSeverity && (SEVERITY_LEVELS as readonly string[]).includes(dbSeverity)) {
     return { severity: dbSeverity, cvssScore: null, cvssVector: null };
   }
 
   // Last resort — check ecosystem_specific
-  const ecoSeverity = vuln.affected?.[0]?.ecosystem_specific?.severity?.toUpperCase();
+  const ecoSeverity = _normaliseSeverityAlias(vuln.affected?.[0]?.ecosystem_specific?.severity);
   if (ecoSeverity && (SEVERITY_LEVELS as readonly string[]).includes(ecoSeverity)) {
     return { severity: ecoSeverity, cvssScore: null, cvssVector: null };
   }

@@ -3,13 +3,13 @@
   "version": "1.0.0",
   "description": "Open source npm package security scanner — catch supply chain attacks before they catch you.",
   "bin": {
-    "safedeps": "./dist/bin/safedeps.js"
+    "safedeps": "dist/bin/safedeps.js"
   },
   "files": [
     "dist/"
   ],
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && mkdir -p dist/data && cp data/top-packages.json dist/data/top-packages.json && cp package.json dist/package.json",
     "dev": "ts-node bin/safedeps.ts",
     "test": "node --require ts-node/register --test tests/*.test.ts",
     "lint": "eslint src/ --ext .ts"

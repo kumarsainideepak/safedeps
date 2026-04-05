@@ -42,7 +42,10 @@ let _chalk: ChalkInstance | null = null;
 
 async function getChalk(): Promise<ChalkInstance> {
   if (!_chalk) {
-    _chalk = (await import('chalk')).default;
+    // TypeScript (module: commonjs) transforms `await import('chalk')` into
+    // `require('chalk')`, which breaks ESM-only chalk v5.
+    // Using Function() prevents TypeScript from transforming this call.
+    _chalk = ((await (Function('return import("chalk")')() as Promise<{ default: ChalkInstance }>)).default);
   }
   return _chalk;
 }

@@ -91,7 +91,7 @@ export default function registerScanCommand(program: Command): void {
       // Show a spinner during network-bound detector phases (terminal mode only)
       let spinner: import('ora').Ora | null = null;
       if (options.output !== 'json') {
-        const ora = (await import('ora')).default;
+        const ora = ((await (Function('return import("ora")')() as Promise<{ default: typeof import('ora').default }>)).default);
         const networkNote = options.offline ? '' : ' (CVE + maintainer + authenticity checks)';
         spinner = ora(`Scanning ${parsed.allPackages.length} dependencies${networkNote}…`).start();
       }

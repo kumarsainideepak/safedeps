@@ -5,6 +5,59 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [v1.0.0] — 2026-04-05
+
+### Fixed
+- **CRITICAL — CVE findings always showed UNKNOWN severity**: The OSV `/v1/querybatch`
+  endpoint returns only `{id, modified}` stubs — not full vulnerability objects. All
+  severity extraction code (`_extractSeverity`, `_parseCvssScore`, `_computeCvssV3Score`)
+  was receiving `undefined` for every field because the data simply wasn't in the batch
+  response. Fixed with a two-phase fetch in `src/sources/osv.ts`:
+  1. Querybatch to collect unique vuln IDs across all packages.
+  2. Individual `/v1/vulns/{id}` fetches (concurrency 10, de-duplicated) to retrieve
+     full details for each advisory.
+  Running `safedeps check axios@0.21.1` now correctly shows `HIGH`; `lodash@4.17.4`
+  shows `CRITICAL`. Verbose output now contains CVSS scores and advisory links.
+- **"MODERATE" severity not recognised** (`src/utils/severity.ts`): GHSA advisories
+  use `"Moderate"` (not `"Medium"`) in `database_specific.severity`. After
+  `.toUpperCase()` the value `"MODERATE"` did not match any entry in
+  `SEVERITY_LEVELS = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'UNKNOWN']` and fell
+  through to `UNKNOWN`. Added `_normaliseSeverityAlias()` which maps
+  `MODERATE → MEDIUM` and `NONE → LOW` before the severity level lookup.
+- **`ERR_REQUIRE_ESM` crash for chalk and ora** (`src/reporters/terminal.ts`,
+  `src/commands/scan.ts`): TypeScript with `module: commonjs` transforms
+  `await import('chalk')` into `Promise.resolve().then(() => require('chalk'))` at
+  compile time, which fails for ESM-only chalk v5 and ora v6. Fixed by using
+  `Function('return import("pkg")')()` which is invisible to the TypeScript
+  transformer and preserves the native dynamic `import()` at runtime.
+
+### Changed
+- **`update-packages` command completely rewritten** (`src/commands/updatePackages.ts`):
+  The previous implementation used `text=boost-exact:true` as the npm search query —
+  this was interpreted as a literal text search and returned irrelevant, low-download
+  packages (e.g. `retux`: 37 downloads/week, `@tapgiants/graphql`: 5 downloads/week),
+  which replaced the curated list and caused false-positive typosquat findings for
+  packages like `redis`, `@types/jsonwebtoken`, and `@types/node-fetch`. The command
+  now follows a two-phase strategy:
+  - **Phase 1 — Candidate discovery**: Seeds from the current `top-packages.json`
+    (ensures well-known packages are always candidates), then fetches one page per
+    search term from 50 broad ecosystem terms. Requests are spaced 400ms apart to
+    avoid the registry's HTTP 429 rate limit (~8 rapid requests triggers it).
+  - **Phase 2 — Download verification**: Queries actual weekly download counts via
+    `api.npmjs.org/downloads/point/last-week`. Unscoped packages are batched (100 per
+    request); scoped packages are fetched individually (npm bulk API rejects them).
+    Only packages with ≥ `--min-downloads` weekly downloads (default 1,000) are kept.
+    The final list is sorted by download count descending.
+  - **Safety guard**: If verification returns fewer than 50 packages (indicative of a
+    network failure), the command aborts without overwriting the existing list.
+  - **New `--min-downloads <n>` option**: Controls the weekly download threshold
+    (default: 1,000).
+- **Build script copies data file** (`package.json`): `npm run build` now executes
+  `cp data/top-packages.json dist/data/top-packages.json` after `tsc`, ensuring the
+  compiled package always ships the curated baseline list.
+
+---
+
 ## [v0.0.3] — 2026-04-03
 
 ### Added
@@ -183,7 +236,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [1.0.0] — 2026-03-01
+## [0.0.0] — 2026-03-01
 
 ### Added
 - `safedeps scan` command — scans all project dependencies for:
