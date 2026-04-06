@@ -203,7 +203,7 @@ safedeps scan --fail-on critical
 | Detector | Method | Network |
 |---|---|---|
 | **Typosquatting** | Levenshtein distance, Soundex phonetics, homoglyphs, separator swaps, combosquats — against top npm packages | No |
-| **CVE vulnerabilities** | OSV.dev batch API (covers NVD + GitHub Advisory DB) | Yes |
+| **CVE vulnerabilities** | OSV.dev batch API — scans **all installed packages** (direct + transitive) from `package-lock.json`, matching `npm audit` coverage | Yes |
 | **License compliance** | SPDX normalisation, compatibility matrix for your project license | No |
 | **Maintainer health** | npm packument + GitHub signals — recency, account age, maintainer count, activity | Yes |
 
@@ -242,8 +242,9 @@ package.json + package-lock.json
   terminal (colour-coded) | JSON (CI/CD)
 ```
 
+- **Full transitive coverage** — reads `package-lock.json` to scan every installed package (direct + transitive), not just what's in `package.json`
 - **One batch request** to OSV.dev for all packages — no per-package API calls, no rate limit concerns
-- **Lockfile-first versioning** — reads `package-lock.json` for exact resolved versions
+- **Lockfile-first versioning** — uses exact resolved versions from `package-lock.json`, never guesses
 - **No API keys required** — all data sources are free and public
 - **Offline mode** — typosquat + license detectors work with zero network calls
 

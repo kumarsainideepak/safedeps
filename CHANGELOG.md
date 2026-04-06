@@ -5,6 +5,35 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [v1.1.0] — 2026-04-06
+
+### Added
+- **Transitive dependency CVE scanning** (`src/utils/lockfileParser.ts`,
+  `src/detectors/cve.ts`, `src/commands/scan.ts`): `safedeps scan` now scans
+  all packages installed in `node_modules` — not just the direct dependencies
+  listed in `package.json` — matching the coverage of `npm audit`.
+
+  Previously, `safedeps scan` on a project with 33 direct dependencies would
+  query OSV.dev for 33 packages. After this change it queries all 300 resolved
+  packages from `package-lock.json`, surfacing vulnerabilities in transitive
+  dependencies such as `body-parser`, `minimist`, `path-to-regexp`, `qs`, and
+  `lodash` that were previously invisible.
+
+  Implementation:
+  - **`parseAllLockfilePackages()`** (`src/utils/lockfileParser.ts`): New export
+    that converts the existing `parseLockfile()` `Map<name, version>` into a flat
+    `Array<{ name, version }>` covering every entry in the lockfile.
+  - **`lockfilePackages` option** (`src/detectors/cve.ts`): `ScanCveOptions`
+    accepts an optional pre-built package list. When provided, `scanCVEs()` uses
+    it directly (all versions are lockfile-exact); when absent, it falls back to
+    the previous direct-deps-only behaviour for projects without a lockfile.
+  - **`scan` command** (`src/commands/scan.ts`): Calls
+    `parseAllLockfilePackages()` once alongside `parseLockfile()` and passes the
+    result to `scanCVEs()`. Spinner text updated to show the total package count
+    including transitive deps (e.g. `300 packages incl. transitive`).
+
+---
+
 ## [v1.0.0] — 2026-04-05
 
 ### Fixed

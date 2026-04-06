@@ -33,6 +33,12 @@ export interface ScanCveOptions {
   projectPath?:   string;
   minSeverity?:   string;
   lockVersions?:  Map<string, string>;
+  /**
+   * Full list of installed packages (direct + transitive) from the lockfile.
+   * When provided, CVE scanning covers all of node_modules — not just the
+   * packages listed in package.json — matching the behaviour of `npm audit`.
+   */
+  lockfilePackages?: Array<{ name: string; version: string }>;
   /** Injectable OSV query function — used in tests to avoid real HTTP calls. */
   queryFn?:       (packages: OsvPackage[]) => Promise<OsvResult[]>;
 }
@@ -56,46 +62,54 @@ export async function scanCVEs(
     projectPath = process.cwd(),
     minSeverity = 'low',
     lockVersions: lockVersionsOpt,
+    lockfilePackages,
     queryFn = queryOSV,
   } = options;
-
-  // 1. Build package list with resolved versions from lockfile
-  const lockVersions = lockVersionsOpt ?? parseLockfile(projectPath);
-  const allPackageNames = parsedPackageJson.allPackages;
-  const allDeps: Record<string, string> = {
-    ...parsedPackageJson.dependencies,
-    ...parsedPackageJson.devDependencies,
-    ...parsedPackageJson.peerDependencies,
-    ...parsedPackageJson.optionalDependencies,
-  };
 
   const toScan: OsvPackage[] = [];
   const skipped: string[]    = [];
   const versionSourceMap     = new Map<string, CveFinding['versionSource']>();
 
-  for (const name of allPackageNames) {
-    // Prefer lockfile version (exact), fall back to range from package.json
-    const lockVersion = lockVersions.get(name);
-    let version: string | undefined;
-    let source: CveFinding['versionSource'];
-
-    if (lockVersion) {
-      version = lockVersion;
-      source  = 'lockfile';
-    } else {
-      const rawVersion = allDeps[name] ?? '';
-      const resolved   = _resolveVersionRange(rawVersion) ?? undefined;
-      version = resolved;
-      source  = resolved ? 'range-floor' : 'unknown';
+  if (lockfilePackages && lockfilePackages.length > 0) {
+    // Fast path: full lockfile list provided — all packages have exact versions
+    for (const { name, version } of lockfilePackages) {
+      versionSourceMap.set(name, 'lockfile');
+      toScan.push({ name, version });
     }
+  } else {
+    // Fallback: resolve versions for direct deps only (no lockfile available)
+    const lockVersions = lockVersionsOpt ?? parseLockfile(projectPath);
+    const allPackageNames = parsedPackageJson.allPackages;
+    const allDeps: Record<string, string> = {
+      ...parsedPackageJson.dependencies,
+      ...parsedPackageJson.devDependencies,
+      ...parsedPackageJson.peerDependencies,
+      ...parsedPackageJson.optionalDependencies,
+    };
 
-    if (!version) {
-      skipped.push(name);
-      continue;
+    for (const name of allPackageNames) {
+      const lockVersion = lockVersions.get(name);
+      let version: string | undefined;
+      let source: CveFinding['versionSource'];
+
+      if (lockVersion) {
+        version = lockVersion;
+        source  = 'lockfile';
+      } else {
+        const rawVersion = allDeps[name] ?? '';
+        const resolved   = _resolveVersionRange(rawVersion) ?? undefined;
+        version = resolved;
+        source  = resolved ? 'range-floor' : 'unknown';
+      }
+
+      if (!version) {
+        skipped.push(name);
+        continue;
+      }
+
+      versionSourceMap.set(name, source);
+      toScan.push({ name, version });
     }
-
-    versionSourceMap.set(name, source);
-    toScan.push({ name, version });
   }
 
   if (toScan.length === 0) {

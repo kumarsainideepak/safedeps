@@ -1,7 +1,7 @@
 import path from 'path';
 import { Command } from 'commander';
 import { parsePackageJson } from '../utils/packageParser';
-import { parseLockfile } from '../utils/lockfileParser';
+import { parseLockfile, parseAllLockfilePackages } from '../utils/lockfileParser';
 import { scanPackages, enrichWithAuthenticity } from '../detectors/typosquat';
 import { scanCVEs } from '../detectors/cve';
 import type { CveResult } from '../detectors/cve';
@@ -82,6 +82,10 @@ export default function registerScanCommand(program: Command): void {
       // Parse lockfile once — shared across all detectors to avoid 3× I/O
       const lockVersions = parseLockfile(projectPath);
 
+      // All installed packages (direct + transitive) for full CVE coverage.
+      // Falls back to direct-deps-only when no lockfile exists.
+      const lockfilePackages = parseAllLockfilePackages(projectPath);
+
       // Shared signal registry — collects per-package signals from maintainer detector
       const signalRegistry = new SignalRegistry();
 
@@ -92,14 +96,15 @@ export default function registerScanCommand(program: Command): void {
       let spinner: import('ora').Ora | null = null;
       if (options.output !== 'json') {
         const ora = ((await (Function('return import("ora")')() as Promise<{ default: typeof import('ora').default }>)).default);
-        const networkNote = options.offline ? '' : ' (CVE + maintainer + authenticity checks)';
-        spinner = ora(`Scanning ${parsed.allPackages.length} dependencies${networkNote}…`).start();
+        const cveCount = lockfilePackages.length > 0 ? lockfilePackages.length : parsed.allPackages.length;
+        const networkNote = options.offline ? '' : ` (CVE + maintainer + authenticity checks, ${cveCount} packages incl. transitive)`;
+        spinner = ora(`Scanning ${parsed.allPackages.length} direct dependencies${networkNote}…`).start();
       }
 
       const [cveSettled, licenseSettled, maintainerSettled, enrichedSettled] = await Promise.allSettled([
         options.offline
           ? Promise.resolve<CveResult | null>(null)
-          : scanCVEs(parsed, { projectPath, minSeverity: options.severity, lockVersions }),
+          : scanCVEs(parsed, { projectPath, minSeverity: options.severity, lockVersions, lockfilePackages }),
         scanLicenses(parsed, { projectPath, projectLicense: options.license, lockVersions, includeDevDeps: options.includeDev }),
         options.offline
           ? Promise.resolve<MaintainerResult | null>(null)

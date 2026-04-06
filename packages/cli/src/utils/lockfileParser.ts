@@ -71,6 +71,21 @@ export function parseLockfile(projectPath: string = process.cwd()): Map<string, 
 }
 
 /**
+ * Returns all packages installed in the lockfile (direct + transitive),
+ * each with their exact resolved version.
+ *
+ * Used by the CVE scanner to catch vulnerabilities in transitive dependencies
+ * that are not listed in package.json but are present in node_modules.
+ *
+ * @returns Array of { name, version } for every installed package.
+ *   Returns empty array if no lockfile found.
+ */
+export function parseAllLockfilePackages(projectPath: string = process.cwd()): Array<{ name: string; version: string }> {
+  const versions = parseLockfile(projectPath);
+  return [...versions.entries()].map(([name, version]) => ({ name, version }));
+}
+
+/**
  * Recursively extracts versions from v1 lockfile dependency tree.
  */
 function _extractV1Deps(deps: Record<string, LockfileV1Entry>, map: Map<string, string>): void {
