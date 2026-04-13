@@ -2,13 +2,15 @@ import fs from 'fs';
 import path from 'path';
 
 interface LockfileV1Entry {
-  version: string;
+  version:    string;
+  integrity?: string;
   dependencies?: Record<string, LockfileV1Entry>;
 }
 
 interface LockfileV2Entry {
-  version?: string;
-  name?: string;
+  version?:   string;
+  name?:      string;
+  integrity?: string;
 }
 
 interface Lockfile {
@@ -86,6 +88,43 @@ export function parseAllLockfilePackages(projectPath: string = process.cwd()): A
 }
 
 /**
+ * Parses package-lock.json to extract SRI integrity hashes for each package.
+ * Used by the SBOM generator to populate the `hashes` field.
+ *
+ * @returns Map of package name → integrity string (e.g. "sha512-abc…")
+ */
+export function parseLockfileIntegrity(projectPath: string = process.cwd()): Map<string, string> {
+  const lockPath = path.resolve(projectPath, 'package-lock.json');
+  if (!fs.existsSync(lockPath)) return new Map();
+
+  let raw: Lockfile;
+  try {
+    raw = JSON.parse(fs.readFileSync(lockPath, 'utf8')) as Lockfile;
+  } catch {
+    return new Map();
+  }
+
+  const hashes = new Map<string, string>();
+  const lockVersion = raw.lockfileVersion ?? 1;
+
+  if (lockVersion >= 2 && raw.packages) {
+    for (const [key, entry] of Object.entries(raw.packages)) {
+      if (!key) continue;
+      const lastNm = key.lastIndexOf('node_modules/');
+      if (lastNm === -1) continue;
+      const name = key.slice(lastNm + 'node_modules/'.length);
+      if (name && entry.integrity && !hashes.has(name)) {
+        hashes.set(name, entry.integrity);
+      }
+    }
+  } else if (raw.dependencies) {
+    _extractV1Integrity(raw.dependencies, hashes);
+  }
+
+  return hashes;
+}
+
+/**
  * Recursively extracts versions from v1 lockfile dependency tree.
  */
 function _extractV1Deps(deps: Record<string, LockfileV1Entry>, map: Map<string, string>): void {
@@ -97,6 +136,17 @@ function _extractV1Deps(deps: Record<string, LockfileV1Entry>, map: Map<string, 
     // v1 can have nested deps inside each dependency
     if (entry.dependencies) {
       _extractV1Deps(entry.dependencies, map);
+    }
+  }
+}
+
+function _extractV1Integrity(deps: Record<string, LockfileV1Entry>, map: Map<string, string>): void {
+  for (const [name, entry] of Object.entries(deps)) {
+    if (entry.integrity && !map.has(name)) {
+      map.set(name, entry.integrity);
+    }
+    if (entry.dependencies) {
+      _extractV1Integrity(entry.dependencies, map);
     }
   }
 }

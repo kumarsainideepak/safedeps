@@ -3,6 +3,8 @@ import type { TyposquatFinding } from '../detectors/typosquat';
 import type { CveResult, CveFinding } from '../detectors/cve';
 import type { LicenseResult } from '../detectors/license';
 import type { MaintainerResult, MaintainerFinding } from '../detectors/maintainer';
+import type { InstallScriptResult } from '../detectors/installScript';
+import type { AbandonedResult } from '../detectors/abandoned';
 
 export interface CheckReport {
   name:             string;
@@ -63,14 +65,16 @@ const CONFIDENCE_MAP: Record<string, ConfidenceConfig> = {
 };
 
 export interface ScanResult {
-  projectName:       string;
-  totalScanned:      number;
-  typosquatFindings: TyposquatFinding[];
-  cveResult:         CveResult | null;
-  licenseResult:     LicenseResult | null;
-  maintainerResult:  MaintainerResult | null;
-  durationMs:        number;
-  verbose?:          boolean;
+  projectName:          string;
+  totalScanned:         number;
+  typosquatFindings:    TyposquatFinding[];
+  cveResult:            CveResult | null;
+  licenseResult:        LicenseResult | null;
+  maintainerResult:     MaintainerResult | null;
+  installScriptResult?: InstallScriptResult | null;
+  abandonedResult?:     AbandonedResult | null;
+  durationMs:           number;
+  verbose?:             boolean;
 }
 
 /**
@@ -79,7 +83,7 @@ export interface ScanResult {
 export async function renderFullReport(scanResult: ScanResult): Promise<void> {
   const chalk = await getChalk();
 
-  const { projectName, totalScanned, typosquatFindings, cveResult, licenseResult, maintainerResult, durationMs, verbose = false } = scanResult;
+  const { projectName, totalScanned, typosquatFindings, cveResult, licenseResult, maintainerResult, installScriptResult, abandonedResult, durationMs, verbose = false } = scanResult;
 
   console.log('');
   console.log(
@@ -106,7 +110,15 @@ export async function renderFullReport(scanResult: ScanResult): Promise<void> {
       renderMaintainerSection(chalk, maintainerResult, verbose);
     }
 
-    printSummary(chalk, totalScanned, typosquatFindings, cveResult, licenseResult, maintainerResult, durationMs);
+    if (installScriptResult) {
+      renderInstallScriptSection(chalk, installScriptResult, verbose);
+    }
+
+    if (abandonedResult) {
+      renderAbandonedSection(chalk, abandonedResult, verbose);
+    }
+
+    printSummary(chalk, totalScanned, typosquatFindings, cveResult, licenseResult, maintainerResult, installScriptResult ?? null, abandonedResult ?? null, durationMs);
     return;
   }
 
@@ -152,7 +164,17 @@ export async function renderFullReport(scanResult: ScanResult): Promise<void> {
     renderMaintainerSection(chalk, maintainerResult, verbose);
   }
 
-  printSummary(chalk, totalScanned, typosquatFindings, cveResult, licenseResult, maintainerResult, durationMs);
+  // ── Install script section ─────────────────────────────────────────────
+  if (installScriptResult) {
+    renderInstallScriptSection(chalk, installScriptResult, verbose);
+  }
+
+  // ── Abandoned section ──────────────────────────────────────────────────
+  if (abandonedResult) {
+    renderAbandonedSection(chalk, abandonedResult, verbose);
+  }
+
+  printSummary(chalk, totalScanned, typosquatFindings, cveResult, licenseResult, maintainerResult, installScriptResult ?? null, abandonedResult ?? null, durationMs);
 }
 
 /** Builds the human-readable finding message for one typosquat result. */
@@ -432,7 +454,13 @@ function renderMaintainerSection(chalk: ChalkInstance, result: MaintainerResult,
     const scoreCol   = colorFn(`${f.score}/100`.padEnd(COL_SCORE));
     const signals    = chalk.dim(_buildMaintainerSignalSummary(f));
 
-    console.log(`  ${riskCol}${packageCol}${scoreCol}${signals}`);
+    const takeoverBadge = f.takeoverRisk === 'high'
+      ? '  ' + chalk.redBright.bold('TAKEOVER RISK')
+      : f.takeoverRisk === 'medium'
+        ? '  ' + chalk.yellow('TAKEOVER RISK')
+        : '';
+
+    console.log(`  ${riskCol}${packageCol}${scoreCol}${signals}${takeoverBadge}`);
 
     if (verbose) {
       _indent(chalk, chalk.dim('npm:              ') + f.npmUrl);
@@ -464,6 +492,114 @@ function renderMaintainerSection(chalk: ChalkInstance, result: MaintainerResult,
   if (!verbose) console.log('');
 }
 
+/**
+ * Renders the install script auditing section.
+ * Flags packages with preinstall/install/postinstall lifecycle scripts.
+ */
+function renderInstallScriptSection(chalk: ChalkInstance, result: InstallScriptResult, verbose: boolean): void {
+  console.log(
+    chalk.bold.blue('  Install Scripts') +
+    chalk.dim(` — scanned ${result.scanned} packages`)
+  );
+  console.log('');
+
+  if (result.findings.length === 0) {
+    console.log(chalk.green('  ✓ No lifecycle install scripts detected.'));
+    console.log('');
+    return;
+  }
+
+  const RISK_COLOR: Record<string, (s: string) => string> = {
+    high:          (s) => chalk.redBright.bold(s),
+    medium:        (s) => chalk.yellow(s),
+    informational: (s) => chalk.cyan(s),
+  };
+
+  const COL_RISK = 10;
+  const COL_PKG  = 30;
+  const COL_HOOK = 14;
+
+  console.log(
+    chalk.dim('  ' +
+      'RISK'.padEnd(COL_RISK) +
+      'PACKAGE'.padEnd(COL_PKG) +
+      'HOOK'.padEnd(COL_HOOK) +
+      'REASON'
+    )
+  );
+  console.log(chalk.dim('  ' + '─'.repeat(90)));
+
+  for (const f of result.findings) {
+    const colorFn    = RISK_COLOR[f.risk] ?? RISK_COLOR['informational'];
+    const riskCol    = colorFn(f.risk.toUpperCase().padEnd(COL_RISK));
+    const packageCol = chalk.white(`${f.name}@${f.version}`.padEnd(COL_PKG));
+    const hookCol    = chalk.dim(f.scriptType.padEnd(COL_HOOK));
+    const reason     = chalk.dim(f.riskReason);
+
+    console.log(`  ${riskCol}${packageCol}${hookCol}${reason}`);
+
+    if (verbose) {
+      _indent(chalk, chalk.dim('Script: ') + f.truncated);
+      _indent(chalk, chalk.dim('npm:    ') + f.npmUrl);
+      console.log('');
+    }
+  }
+
+  if (!verbose) console.log('');
+}
+
+/**
+ * Renders the abandoned package detection section.
+ * Flags packages with no recent publishes or archived repos.
+ */
+function renderAbandonedSection(chalk: ChalkInstance, result: AbandonedResult, verbose: boolean): void {
+  console.log(
+    chalk.bold.blue('  Abandoned Packages') +
+    chalk.dim(` — scanned ${result.scanned} dependencies`)
+  );
+  console.log('');
+
+  if (result.findings.length === 0) {
+    console.log(chalk.green('  ✓ No abandoned packages detected.'));
+    console.log('');
+    return;
+  }
+
+  const COL_RISK = 10;
+  const COL_PKG  = 30;
+
+  console.log(
+    chalk.dim('  ' +
+      'RISK'.padEnd(COL_RISK) +
+      'PACKAGE'.padEnd(COL_PKG) +
+      'REASONS'
+    )
+  );
+  console.log(chalk.dim('  ' + '─'.repeat(80)));
+
+  for (const f of result.findings) {
+    const colorFn = f.risk === 'high'
+      ? (s: string) => chalk.redBright.bold(s)
+      : (s: string) => chalk.yellow(s);
+
+    const riskCol    = colorFn(f.risk.toUpperCase().padEnd(COL_RISK));
+    const packageCol = chalk.white(`${f.name}@${f.version}`.padEnd(COL_PKG));
+    const reasons    = chalk.dim(f.reasons.join(' · '));
+
+    console.log(`  ${riskCol}${packageCol}${reasons}`);
+
+    if (verbose) {
+      _indent(chalk, chalk.dim('npm:    ') + f.npmUrl);
+      if (f.githubUrl) {
+        _indent(chalk, chalk.dim('GitHub: ') + f.githubUrl);
+      }
+      console.log('');
+    }
+  }
+
+  if (!verbose) console.log('');
+}
+
 /** Builds a compact signal summary string for one maintainer finding. */
 function _buildMaintainerSignalSummary(f: MaintainerFinding): string {
   const parts: string[] = [];
@@ -479,6 +615,10 @@ function _buildMaintainerSignalSummary(f: MaintainerFinding): string {
   }
 
   parts.push(`${f.signals.maintainerCount} maintainer${f.signals.maintainerCount !== 1 ? 's' : ''}`);
+
+  if (f.signals.maintainerChanged) {
+    parts.push(`Publisher changed (was: ${f.signals.previousPublisher ?? 'unknown'})`);
+  }
 
   if (!f.signals.hasGitHub) {
     parts.push('No GitHub');
@@ -520,6 +660,8 @@ function printSummary(
   cveResult: CveResult | null,
   licenseResult: LicenseResult | null,
   maintainerResult: MaintainerResult | null,
+  installScriptResult: InstallScriptResult | null,
+  abandonedResult: AbandonedResult | null,
   durationMs: number,
 ): void {
   const critical = findings.filter(f => f.confidence === 'high').length;
@@ -557,6 +699,24 @@ function printSummary(
     }
     if (maintainerResult.mediumRisk > 0) {
       parts.push(chalk.yellow(`${maintainerResult.mediumRisk} medium-risk maintainer${maintainerResult.mediumRisk > 1 ? 's' : ''}`));
+    }
+  }
+
+  if (installScriptResult) {
+    if (installScriptResult.highRisk > 0) {
+      parts.push(chalk.redBright.bold(`${installScriptResult.highRisk} high-risk script${installScriptResult.highRisk > 1 ? 's' : ''}`));
+    }
+    if (installScriptResult.mediumRisk > 0) {
+      parts.push(chalk.yellow(`${installScriptResult.mediumRisk} medium-risk script${installScriptResult.mediumRisk > 1 ? 's' : ''}`));
+    }
+  }
+
+  if (abandonedResult) {
+    if (abandonedResult.highRisk > 0) {
+      parts.push(chalk.redBright.bold(`${abandonedResult.highRisk} abandoned (high)`));
+    }
+    if (abandonedResult.mediumRisk > 0) {
+      parts.push(chalk.yellow(`${abandonedResult.mediumRisk} abandoned (medium)`));
     }
   }
 

@@ -108,13 +108,14 @@ export interface NpmMaintainer {
 }
 
 export interface NpmPackumentInfo {
-  name:              string;
-  latestVersion:     string;
-  lastPublished:     Date | null;   // time.modified from packument
-  createdAt:         Date | null;   // time.created from packument
-  publishedVersions: number;        // total number of published versions
-  maintainers:       NpmMaintainer[];
-  repositoryUrl:     string | null; // raw repository field → normalised URL
+  name:                      string;
+  latestVersion:             string;
+  lastPublished:             Date | null;      // time.modified from packument
+  createdAt:                 Date | null;      // time.created from packument
+  publishedVersions:         number;           // total number of published versions
+  maintainers:               NpmMaintainer[];
+  repositoryUrl:             string | null;    // raw repository field → normalised URL
+  previousVersionPublisher?: string | null;    // _npmUser.name from 2nd-to-last version
 }
 
 /**
@@ -177,6 +178,9 @@ export async function fetchNpmPackumentInfo(name: string): Promise<NpmPackumentI
 
   const distTags = data['dist-tags'] as Record<string, string> | undefined;
 
+  // Extract previous version publisher from packument versions
+  const previousVersionPublisher = _extractPreviousPublisher(data, timeMap, distTags?.latest);
+
   return {
     name,
     latestVersion:     distTags?.latest ?? '',
@@ -185,7 +189,38 @@ export async function fetchNpmPackumentInfo(name: string): Promise<NpmPackumentI
     publishedVersions,
     maintainers,
     repositoryUrl,
+    previousVersionPublisher,
   };
+}
+
+/**
+ * Extracts the _npmUser.name from the second-to-last published version.
+ * Used for maintainer takeover detection — comparing current vs. previous publisher.
+ */
+function _extractPreviousPublisher(
+  data: Record<string, unknown>,
+  timeMap: Record<string, string> | undefined,
+  latestVersion: string | undefined,
+): string | null {
+  if (!timeMap || !latestVersion) return null;
+
+  const versions = data.versions as Record<string, Record<string, unknown>> | undefined;
+  if (!versions) return null;
+
+  // Get version list sorted by publish time (newest first)
+  const versionEntries = Object.keys(timeMap)
+    .filter(k => k !== 'created' && k !== 'modified')
+    .sort((a, b) => new Date(timeMap[b]).getTime() - new Date(timeMap[a]).getTime());
+
+  if (versionEntries.length < 2) return null;
+
+  // Find the second-to-last version (the one before latest)
+  const previousVersion = versionEntries[1];
+  const prevManifest = versions[previousVersion];
+  if (!prevManifest) return null;
+
+  const npmUser = prevManifest._npmUser as { name?: string } | undefined;
+  return npmUser?.name ?? null;
 }
 
 function _extractRepositoryUrl(repo: unknown): string | null {
@@ -225,6 +260,55 @@ export async function fetchNpmAccountAge(username: string): Promise<Date | null>
   } catch {
     return null;
   }
+}
+
+// ─── Version manifest (for diff command) ──────────────────────────────────
+
+export interface VersionManifestRaw {
+  name:            string;
+  version:         string;
+  dependencies:    Record<string, string>;
+  devDependencies: Record<string, string>;
+  scripts:         Record<string, string>;
+  publisher:       string | null;     // _npmUser.name
+}
+
+/**
+ * Fetches a specific version manifest from the npm registry.
+ * Used by `safedeps diff` to compare two package versions.
+ */
+export async function fetchVersionManifest(
+  name: string,
+  version: string,
+): Promise<VersionManifestRaw> {
+  const url = registryUrl(name, version);
+
+  let response: Response;
+  try {
+    response = await fetchWithRetry(
+      url,
+      { headers: { Accept: 'application/json', 'User-Agent': USER_AGENT } },
+      { timeoutMs: TIMEOUT_MS },
+    );
+  } catch (err) {
+    if ((err as Error).name === 'AbortError') throw new Error(`npm registry timed out for ${name}@${version}`);
+    throw new Error(`npm registry network error for ${name}@${version}: ${(err as Error).message}`);
+  }
+
+  if (!response.ok) throw new Error(`npm registry returned HTTP ${response.status} for ${name}@${version}`);
+
+  const data = await response.json() as Record<string, unknown>;
+
+  const npmUser = data._npmUser as { name?: string } | undefined;
+
+  return {
+    name,
+    version: (data.version as string) ?? version,
+    dependencies:    (data.dependencies    as Record<string, string>) ?? {},
+    devDependencies: (data.devDependencies as Record<string, string>) ?? {},
+    scripts:         (data.scripts         as Record<string, string>) ?? {},
+    publisher:       npmUser?.name ?? null,
+  };
 }
 
 // ─── Batch license fetch ───────────────────────────────────────────────────

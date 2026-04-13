@@ -5,6 +5,120 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [v1.2.0] — 2026-04-13
+
+### Added
+
+- **Install script auditing** (`src/detectors/installScript.ts`, `tests/installScript.test.ts`):
+  `safedeps scan` now reads every `preinstall`, `install`, and `postinstall` lifecycle
+  script from `node_modules/<pkg>/package.json` and classifies it into three risk tiers:
+  - **High** — script contains a network download tool (`curl`, `wget`), inline code
+    execution (`node -e`, `eval()`, `Function()`), shell spawning (`exec`, `execSync`,
+    `child_process`), shell scripts (`.sh`), Windows equivalents (`powershell`,
+    `cmd /c`), or any hard-coded URL.
+  - **Medium** — any `preinstall` hook (runs before package code is verified), or any
+    install script longer than 200 characters (potential obfuscation).
+  - **Informational** — all other lifecycle scripts (e.g. `node-gyp rebuild`).
+
+  The detector is fully offline and runs even with `--offline`. Install script counts
+  are appended to the scan summary footer. `--fail-on high` exits with code 1 if any
+  high-risk script is found.
+
+- **Abandoned package detection** (`src/detectors/abandoned.ts`, `tests/abandoned.test.ts`):
+  A pure function (`scanAbandoned()`) that reuses data already fetched by the maintainer
+  detector — zero additional network calls. Packages not published for ≥ 730 days
+  (configurable via `thresholdDays`) are classified as:
+  - **High** — no publish in ≥ 2 years AND repo is archived OR package has no GitHub link.
+  - **Medium** — no publish in ≥ 2 years AND repo is still active on GitHub.
+
+  Each finding includes a human-readable `reasons` array (e.g.
+  `["No npm publish in 2.7 years", "GitHub repo archived"]`). Abandoned counts appear
+  in the summary footer. The section renders after the Maintainer Health section.
+
+- **Maintainer takeover detection** (extends `src/detectors/maintainer.ts`,
+  `src/sources/npmRegistry.ts`, `src/reporters/terminal.ts`):
+  Detects publisher identity changes that are a hallmark of supply chain attacks
+  (e.g. the `event-stream` and `ua-parser-js` incidents). Implementation:
+  - `fetchNpmPackumentInfo()` (`src/sources/npmRegistry.ts`) now extracts
+    `_npmUser.name` from the second-to-last published version in the packument —
+    no extra network requests, the data is already present in the packument response.
+  - `MaintainerSignals` gained `maintainerChanged: boolean` and
+    `previousPublisher: string | null`. When the previous publisher is not present in
+    the current `maintainers[]` list, `maintainerChanged` is `true`.
+  - `MaintainerFinding` gained `takeoverRisk: 'high' | 'medium' | 'none'`:
+    - **High** — popular package (≥ 1,000 GitHub stars) + maintainer changed +
+      latest publish ≤ 30 days ago.
+    - **Medium** — maintainer changed + latest publish ≤ 90 days ago.
+    - **None** — no change detected.
+  - A 15-point score penalty is applied when `maintainerChanged && isPopular`,
+    propagating the risk into the overall health score.
+  - Terminal reporter shows a red `TAKEOVER RISK` badge (yellow for medium) next to
+    affected maintainer findings.
+
+- **`safedeps diff <pkg@v1> <pkg@v2>` command** (`src/commands/diff.ts`,
+  `src/utils/packageDiff.ts`, `tests/diff.test.ts`):
+  Compares two published versions of any npm package and highlights
+  security-relevant changes. No free alternative exists for this.
+  - Fetches both version manifests from the npm registry in parallel.
+  - Computes changes across three axes: install scripts (added/removed/modified),
+    production dependencies (added/removed/version-changed), and publisher identity.
+  - Surfaces a `riskFlags` list: "Publisher changed", "New install hook added:
+    postinstall", "3 new dependency(s) added", etc.
+  - Colour-coded terminal output: red for risk flags, green for additions, dim for
+    removals, yellow for modifications.
+  - `src/utils/packageDiff.ts` exports `computeDiff()` — a pure function that accepts
+    two `VersionManifest` objects, making it independently testable without network.
+  - `fetchVersionManifest()` added to `src/sources/npmRegistry.ts`.
+
+- **`safedeps guard [npm install args...]` command** (`src/commands/guard.ts`,
+  `tests/guard.test.ts`):
+  Pre-install security firewall. Intercepts an `npm install` invocation before packages
+  land in `node_modules`:
+  1. Runs `npm install --dry-run --json [args]` to determine what packages would be
+     added or updated.
+  2. Runs typosquat detection on the new package names.
+  3. Fetches install scripts for each new package from the npm registry (since
+     `node_modules` does not exist yet) and classifies them using the same logic as
+     the install script auditor.
+  4. Displays a pre-install risk report.
+  5. Prompts the user (`[y/N]`) when high-risk findings are present. `--yes` skips the
+     prompt for CI use.
+  6. Proceeds with the real `npm install` (stdio inherited) if confirmed, or exits 1 if
+     aborted.
+
+- **`safedeps sbom` command** (`src/commands/sbom.ts`, `src/generators/cyclonedx.ts`,
+  `tests/sbom.test.ts`):
+  Generates a [CycloneDX 1.5](https://cyclonedx.org) JSON Software Bill of Materials
+  for the project's npm dependencies.
+  - Each component includes: package name, resolved version (from lockfile),
+    PURL (`pkg:npm/<name>@<version>`), SPDX license identifier (from `node_modules`),
+    and SRI integrity hash (from `package-lock.json`).
+  - Scoped packages are PURL-encoded per spec (`@scope/name` → `%40scope%2Fname`).
+  - Integrity strings (e.g. `sha512-abc sha256-xyz`) are split and mapped to CycloneDX
+    `hashes[]` entries with correct algorithm names (`SHA-512`, `SHA-256`).
+  - Metadata block includes timestamp, safedeps tool entry, and project application
+    component.
+  - Components are sorted alphabetically for deterministic output.
+  - Options: `--output <file>` (default stdout), `--include-dev` (includes
+    `devDependencies`), `--path <dir>` (project root).
+  - `parseLockfileIntegrity()` added to `src/utils/lockfileParser.ts` to extract SRI
+    hashes from both v1 and v2/v3 lockfile formats.
+
+### Changed
+
+- **`scan` command** (`src/commands/scan.ts`): `scanInstallScripts()` added to the
+  `Promise.allSettled` detector array. `scanAbandoned()` is called synchronously after
+  the maintainer result resolves (it is a pure function, no await needed).
+  `installScriptResult` and `abandonedResult` added to the `ScanResult` object.
+  Both are wired into `--fail-on` logic.
+- **Terminal reporter** (`src/reporters/terminal.ts`): Added `_renderInstallScriptSection()`
+  and `_renderAbandonedSection()`. Section render order: CVE → License → Maintainer →
+  Install Scripts → Abandoned. Summary footer extended with install script and abandoned
+  package counts.
+- **`bin/safedeps.ts`**: Registered `diff`, `guard`, and `sbom` commands.
+
+---
+
 ## [v1.1.0] — 2026-04-06
 
 ### Added

@@ -9,6 +9,10 @@ import { scanLicenses } from '../detectors/license';
 import type { LicenseResult } from '../detectors/license';
 import { scanMaintainerHealth } from '../detectors/maintainer';
 import type { MaintainerResult } from '../detectors/maintainer';
+import { scanInstallScripts } from '../detectors/installScript';
+import type { InstallScriptResult } from '../detectors/installScript';
+import { scanAbandoned } from '../detectors/abandoned';
+import type { AbandonedResult } from '../detectors/abandoned';
 import { renderFullReport } from '../reporters/terminal';
 import type { ScanResult } from '../reporters/terminal';
 import { SignalRegistry } from '../utils/signalRegistry';
@@ -101,7 +105,7 @@ export default function registerScanCommand(program: Command): void {
         spinner = ora(`Scanning ${parsed.allPackages.length} direct dependencies${networkNote}…`).start();
       }
 
-      const [cveSettled, licenseSettled, maintainerSettled, enrichedSettled] = await Promise.allSettled([
+      const [cveSettled, licenseSettled, maintainerSettled, enrichedSettled, installScriptSettled] = await Promise.allSettled([
         options.offline
           ? Promise.resolve<CveResult | null>(null)
           : scanCVEs(parsed, { projectPath, minSeverity: options.severity, lockVersions, lockfilePackages }),
@@ -112,6 +116,7 @@ export default function registerScanCommand(program: Command): void {
         options.offline
           ? Promise.resolve(rawTyposquatFindings)
           : enrichWithAuthenticity(rawTyposquatFindings, { signalRegistry }),
+        scanInstallScripts(parsed, { projectPath, lockVersions }),
       ]);
 
       spinner?.stop();
@@ -145,6 +150,16 @@ export default function registerScanCommand(program: Command): void {
           ? maintainerSettled.value
           : { findings: [], scanned: 0, highRisk: 0, mediumRisk: 0, error: (maintainerSettled.reason as Error).message };
 
+      const installScriptResult: InstallScriptResult | null =
+        installScriptSettled.status === 'fulfilled'
+          ? installScriptSettled.value
+          : { findings: [], scanned: 0, highRisk: 0, mediumRisk: 0, informational: 0, error: (installScriptSettled.reason as Error).message };
+
+      // Abandoned detection — pure function over maintainer data, no network calls
+      const abandonedResult: AbandonedResult | null = maintainerResult
+        ? scanAbandoned(maintainerResult.findings)
+        : null;
+
       const durationMs = Date.now() - start;
 
       const scanResult: ScanResult = {
@@ -154,6 +169,8 @@ export default function registerScanCommand(program: Command): void {
         cveResult,
         licenseResult,
         maintainerResult,
+        installScriptResult,
+        abandonedResult,
         durationMs,
         verbose:           options.verbose ?? false,
       };
@@ -192,7 +209,13 @@ export default function registerScanCommand(program: Command): void {
           (maintainerResult.mediumRisk > 0 && severityOrder.indexOf('medium') <= threshold)
         );
 
-        if (typoBlocking || cveBlocking || licenseBlocking || maintainerBlocking) {
+        // Install script high risk → "high"; medium risk → "medium"
+        const installScriptBlocking = installScriptResult !== null && (
+          (installScriptResult.highRisk   > 0 && severityOrder.indexOf('high')   <= threshold) ||
+          (installScriptResult.mediumRisk > 0 && severityOrder.indexOf('medium') <= threshold)
+        );
+
+        if (typoBlocking || cveBlocking || licenseBlocking || maintainerBlocking || installScriptBlocking) {
           console.error(`  Build failed: issues found at "${options.failOn}" level or above.\n`);
           process.exit(1);
         }

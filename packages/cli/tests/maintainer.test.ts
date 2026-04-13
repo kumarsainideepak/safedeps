@@ -25,6 +25,8 @@ const HEALTHY_SIGNALS: MaintainerSignals = {
   openIssues:          20,
   isArchived:          false,
   hasGitHub:           true,
+  maintainerChanged:   false,
+  previousPublisher:   null,
 };
 
 const STALE_SIGNALS: MaintainerSignals = {
@@ -36,6 +38,8 @@ const STALE_SIGNALS: MaintainerSignals = {
   openIssues:          50,
   isArchived:          false,
   hasGitHub:           true,
+  maintainerChanged:   false,
+  previousPublisher:   null,
 };
 
 const NO_GITHUB_SIGNALS: MaintainerSignals = {
@@ -47,6 +51,8 @@ const NO_GITHUB_SIGNALS: MaintainerSignals = {
   openIssues:          null,
   isArchived:          false,
   hasGitHub:           false,
+  maintainerChanged:   false,
+  previousPublisher:   null,
 };
 
 // ─── _scoreRecency ─────────────────────────────────────────────────────────

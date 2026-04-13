@@ -48,6 +48,8 @@ export interface MaintainerSignals {
   openIssues:          number | null;
   isArchived:          boolean;
   hasGitHub:           boolean;
+  maintainerChanged:   boolean;        // true if current maintainers differ from previous publisher
+  previousPublisher:   string | null;  // _npmUser.name from the second-to-last version
 }
 
 export interface ScoreBreakdown {
@@ -59,6 +61,8 @@ export interface ScoreBreakdown {
   popularity:      number;   // 0–5
 }
 
+export type TakeoverRisk = 'high' | 'medium' | 'none';
+
 export interface MaintainerFinding {
   name:             string;
   version:          string;
@@ -69,6 +73,7 @@ export interface MaintainerFinding {
   npmUrl:           string;
   githubUrl:        string | null;
   maintainerNames:  string[];     // npm usernames from packument.maintainers[]
+  takeoverRisk:     TakeoverRisk;
 }
 
 export interface MaintainerResult {
@@ -300,6 +305,11 @@ export async function scanMaintainerHealth(
     const accountAge = accountAgeMap.get(name) ?? null;
     const version    = lockVersions.get(name) ?? (packument?.latestVersion ?? '(unknown)');
 
+    // Detect maintainer changes
+    const prevPublisher = packument?.previousVersionPublisher ?? null;
+    const currentMaintainerNames = packument?.maintainers.map(m => m.name) ?? [];
+    const maintainerChanged = prevPublisher !== null && !currentMaintainerNames.includes(prevPublisher);
+
     const signals: MaintainerSignals = {
       daysSincePublish:    _daysSince(packument?.lastPublished ?? null),
       maintainerCount:     packument?.maintainers.length ?? 0,
@@ -309,11 +319,31 @@ export async function scanMaintainerHealth(
       openIssues:          github?.openIssues ?? null,
       isArchived:          github?.isArchived ?? false,
       hasGitHub:           github !== null,
+      maintainerChanged,
+      previousPublisher:   prevPublisher,
     };
 
     const breakdown = computeScore(signals);
-    const score     = Math.max(0, Math.min(100, totalScore(breakdown)));
-    const risk      = toRiskLevel(score);
+    let score = Math.max(0, Math.min(100, totalScore(breakdown)));
+
+    // Takeover penalty: popular package with changed maintainer
+    const isPopular = (github?.stars ?? 0) >= 1000;
+    if (maintainerChanged && isPopular) {
+      score = Math.max(0, score - 15);
+    }
+
+    const risk = toRiskLevel(score);
+
+    // Classify takeover risk
+    const daysSincePublish = _daysSince(packument?.lastPublished ?? null);
+    let takeoverRisk: TakeoverRisk = 'none';
+    if (maintainerChanged) {
+      if (isPopular && daysSincePublish !== null && daysSincePublish <= 30) {
+        takeoverRisk = 'high';
+      } else if (daysSincePublish !== null && daysSincePublish <= 90) {
+        takeoverRisk = 'medium';
+      }
+    }
 
     findings.push({
       name,
@@ -324,7 +354,8 @@ export async function scanMaintainerHealth(
       breakdown,
       npmUrl:           `https://www.npmjs.com/package/${name}`,
       githubUrl:        github?.htmlUrl ?? null,
-      maintainerNames:  packument?.maintainers.map(m => m.name) ?? [],
+      maintainerNames:  currentMaintainerNames,
+      takeoverRisk,
     });
   }
 

@@ -1,6 +1,6 @@
 {
   "name": "safedeps",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Open source npm package security scanner — catch supply chain attacks before they catch you.",
   "bin": {
     "safedeps": "dist/bin/safedeps.js"

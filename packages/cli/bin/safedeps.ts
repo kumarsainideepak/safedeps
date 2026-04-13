@@ -5,6 +5,9 @@ import pkg from '../package.json';
 import registerScanCommand from '../src/commands/scan';
 import registerCheckCommand from '../src/commands/check';
 import registerUpdatePackagesCommand from '../src/commands/updatePackages';
+import registerDiffCommand from '../src/commands/diff';
+import registerGuardCommand from '../src/commands/guard';
+import registerSbomCommand from '../src/commands/sbom';
 
 program
   .name('safedeps')
@@ -15,6 +18,9 @@ program
 registerScanCommand(program);
 registerCheckCommand(program);
 registerUpdatePackagesCommand(program);
+registerDiffCommand(program);
+registerGuardCommand(program);
+registerSbomCommand(program);
 
 program.parse(process.argv);
 
