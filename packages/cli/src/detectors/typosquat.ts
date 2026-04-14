@@ -324,7 +324,6 @@ function _computeAuthenticityScore(
 
 function _toVerdict(score: number): NpmAuthenticity['verdict'] {
   if (score >= 70) return 'likely-legitimate';
-  if (score >= 50) return 'likely-legitimate';
   if (score >= 25) return 'uncertain';
   return 'suspicious';
 }

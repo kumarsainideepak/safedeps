@@ -5,6 +5,41 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [v1.2.1] — 2026-04-14
+
+### Fixed
+- **`_toVerdict()` dead branch** (`src/detectors/typosquat.ts`): The score band
+  `50–69` incorrectly returned `'likely-legitimate'` instead of `'uncertain'` due
+  to a duplicate condition. Packages scoring 50–69 now correctly surface as
+  `uncertain` in `safedeps check` output and JSON results. The `dismissed` flag
+  (threshold `score >= 70`) was unaffected.
+
+### Changed
+- **README rewritten to match v1.2.0 reality**: Removed documentation for features
+  that do not exist in the codebase:
+  - `--output html` flag (was documented, never implemented)
+  - `safedeps watch` command (was documented, never implemented)
+  - `safedeps fix` command (was referenced in hero example, never implemented)
+  - `safedeps.config.json` configuration file (entire section removed; moved to
+    v1.3 roadmap as a planned item)
+  - Stale `v1.0.0` version badge updated to `v1.2.0`
+  - Maintainer health score weights table corrected (removed non-existent "2FA
+    status" row; updated weights to match the actual scoring implementation)
+  - "How It Works" diagram updated to include install script auditing and
+    takeover detection; removed HTML from output options
+  - Roadmap updated: v1.0–v1.2 marked complete (✅); v1.3 section added with
+    accurate planned items (allowlist/config file, SARIF output, `GITHUB_TOKEN`
+    warning, CVE auto-fix command)
+  - Comparison table updated: removed false "Real-time alerts" claim; added
+    accurate rows for `guard`, `diff`, SBOM, abandoned detection, and takeover
+    detection
+  - Project structure updated to reflect actual directories (removed references
+    to `web-dashboard/`, `github-action/`, and `safedeps.config.json`)
+  - CI example updated with `GITHUB_TOKEN` advisory note explaining the
+    unauthenticated rate limit
+
+---
+
 ## [v1.2.0] — 2026-04-13
 
 ### Added
